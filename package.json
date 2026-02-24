@@ -1,0 +1,18 @@
+{
+  "name": "bridge-nestjs-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bridge NestJS plugin workspace",
+  "workspaces": [
+    "bridge-nestjs",
+    "demo"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=bridge-nestjs",
+    "build:demo": "npm run build --workspace=demo",
+    "start:demo": "npm run start:dev --workspace=demo",
+    "test": "npm run test --workspace=bridge-nestjs",
+    "test:install": "bash scripts/test-install.sh",
+    "package": "cd bridge-nestjs && npm pack --pack-destination ../"
+  }
+}
