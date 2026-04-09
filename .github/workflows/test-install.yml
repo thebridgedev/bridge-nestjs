@@ -1,0 +1,58 @@
+# Test that the packed package installs cleanly with NestJS 10 and NestJS 11
+name: Test install
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  install-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nest-version: ['10', '11']
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build and pack package
+        run: |
+          cd bridge-nestjs
+          npm install
+          npm run build
+          npm pack
+          mv nebulr-group-bridge-nestjs-*.tgz ../install-test-pkg.tgz
+
+      - name: Install with NestJS ${{ matrix.nest-version }}
+        run: |
+          mkdir -p install-test
+          cd install-test
+          npm init -y
+          npm install \
+            @nestjs/common@^${{ matrix.nest-version }}.0.0 \
+            @nestjs/core@^${{ matrix.nest-version }}.0.0 \
+            reflect-metadata@^0.2.0 \
+            rxjs@^7.0.0
+          npm install ../install-test-pkg.tgz
+          echo "Install with NestJS ${{ matrix.nest-version }} succeeded"
+
+      - name: Verify exports
+        run: |
+          cd install-test
+          node -e "
+            require('reflect-metadata');
+            const pkg = require('@nebulr-group/bridge-nestjs');
+            if (!pkg.BridgeModule) throw new Error('BridgeModule not exported');
+            if (!pkg.BridgeAuthGuard) throw new Error('BridgeAuthGuard not exported');
+            if (!pkg.BridgeHttpService) throw new Error('BridgeHttpService not exported');
+            if (!pkg.BridgeHttpError) throw new Error('BridgeHttpError not exported');
+            console.log('All exports OK for NestJS ${{ matrix.nest-version }}');
+          "

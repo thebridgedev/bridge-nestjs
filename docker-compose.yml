@@ -1,0 +1,21 @@
+services:
+  bridge-nestjs:
+    container_name: bridge-nestjs
+    image: bridge-nestjs:dev
+    build:
+      target: dev
+      context: ./
+      dockerfile: ./Dockerfile
+    volumes:
+      - ./:/home/bridgeuser/app
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    ports:
+      - "3040:3000"
+    networks:
+      - bridge
+
+networks:
+  bridge:
+    driver: bridge
