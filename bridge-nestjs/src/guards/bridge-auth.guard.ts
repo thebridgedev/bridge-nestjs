@@ -61,7 +61,7 @@ const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = 
  * Guard that validates JWT bearer tokens / API tokens and enforces
  * role, feature flag, and privilege requirements.
  *
- * Supports two authentication paths:
+ * Supports two authentication paths that are evaluated **independently**:
  *
  * 1. **API token path** (x-api-key header):
  *    - If `req.bridgeApiToken` is already set (pre-processed by bridge-api middleware),
@@ -71,8 +71,13 @@ const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = 
  *    - Enforces `@RequirePrivilege` when present; user JWTs bypass this check.
  *
  * 2. **User JWT path** (Authorization: Bearer header):
- *    - Verifies via JWKS (user token endpoint).
+ *    - Verifies via JWKS (user token endpoint), then sets
+ *      `req.bridgeUser`, `req.bridgeTenant`, and `req.bridgeAccessToken`.
  *    - Enforces route-rule privilege (from config) and `@RequireRole`/`@RequireFeatureFlag`.
+ *
+ * **When both headers are present (e.g. cloud-views always sends both), both paths
+ * run and both contexts coexist on `request`.** The guard returns true as long as at
+ * least one credential is valid (subject to `@AcceptAuth` and per-credential checks).
  *
  * Returns RFC 6750-compliant WWW-Authenticate headers on 401 responses (HTTP only).
  *
@@ -130,9 +135,15 @@ export class BridgeAuthGuard implements CanActivate {
 
     // 5. Check x-api-key header (API token path)
     const apiKey = request.headers['x-api-key'] as string | undefined;
+    const hasAuthHeader = !!request.headers.authorization;
     let apiTokenClaims: ApiTokenClaims | null = null;
 
-    if (apiKey && acceptedType === 'jwt') {
+    // @AcceptAuth('jwt') semantics: the endpoint requires a user JWT for its
+    // user-context decisions. When BOTH headers are present (cloud-views ALWAYS
+    // sends both), we accept the request and let the JWT branch populate
+    // `request.bridgeUser`. We only reject if the API token is the *only*
+    // credential the caller offered.
+    if (apiKey && acceptedType === 'jwt' && !hasAuthHeader) {
       this.configService.log('API token rejected — endpoint only accepts user JWTs');
       this.setWwwAuthenticate(
         response,
@@ -145,7 +156,12 @@ export class BridgeAuthGuard implements CanActivate {
       });
     }
 
-    if (apiKey) {
+    // When @AcceptAuth('jwt') and Bearer is present, the API key is informational
+    // only — skip API-token verification entirely so its result doesn't trigger
+    // privilege checks meant for the JWT path.
+    const skipApiTokenForJwtOnly = acceptedType === 'jwt' && hasAuthHeader;
+
+    if (apiKey && !skipApiTokenForJwtOnly) {
       if (request.bridgeApiToken) {
         // a. Pre-processed by bridge-api middleware — trust it, skip re-verification
         apiTokenClaims = request.bridgeApiToken;
@@ -192,7 +208,104 @@ export class BridgeAuthGuard implements CanActivate {
       // c. else: non-JWT key (opaque) — no API token context, fall through to Authorization
     }
 
-    // 6. API token path: privilege check, then return
+    // 6. User JWT path — extract and validate Authorization: Bearer token
+    //
+    // Independent from the API-token path: when both credentials are present
+    // and valid, both contexts coexist on `request` (bridgeApiToken AND
+    // bridgeUser/bridgeTenant/bridgeAccessToken). cloud-views and other
+    // first-party Bridge frontends rely on this — they always send both.
+    const authHeader = request.headers.authorization;
+    let user: BridgeUser | null = null;
+    let token: string | null = null;
+
+    if (authHeader && acceptedType === 'api_token') {
+      this.configService.log('User JWT rejected — endpoint only accepts API tokens');
+      this.setWwwAuthenticate(
+        response,
+        'Bearer error="invalid_request", error_description="User JWT authentication is not accepted for this endpoint"',
+      );
+      throw new UnauthorizedException({
+        statusCode: 401,
+        error: 'Unauthorized',
+        message: 'auth type not accepted',
+      });
+    }
+
+    if (authHeader) {
+      token = this.extractToken(request);
+      if (!token) {
+        this.configService.log('Authorization header present but malformed');
+        this.setWwwAuthenticate(
+          response,
+          'Bearer error="invalid_token", error_description="The access token is invalid"',
+        );
+        throw new UnauthorizedException({
+          statusCode: 401,
+          error: 'Unauthorized',
+          message: 'Access token missing or invalid',
+        });
+      }
+
+      let claims;
+      try {
+        claims = await this.jwksService.verifyToken(token);
+      } catch (error) {
+        if (error instanceof TokenVerificationError) {
+          this.configService.log('Token verification failed', { code: error.code });
+          const mapped = TOKEN_ERROR_MAP[error.code] ?? {
+            error: 'invalid_token',
+            description: 'The access token is invalid',
+          };
+          this.setWwwAuthenticate(
+            response,
+            `Bearer error="${mapped.error}", error_description="${mapped.description}"`,
+          );
+          throw new UnauthorizedException({
+            statusCode: 401,
+            error: 'Unauthorized',
+            message: mapped.description,
+          });
+        }
+        this.setWwwAuthenticate(
+          response,
+          'Bearer error="invalid_token", error_description="The access token is invalid"',
+        );
+        throw new UnauthorizedException({
+          statusCode: 401,
+          error: 'Unauthorized',
+          message: 'Access token missing or invalid',
+        });
+      }
+
+      // Attach user and tenant to request
+      user = transformJwtToBridgeUser(claims);
+      const tenant = transformJwtToBridgeTenant(claims);
+
+      request.bridgeUser = user;
+      request.bridgeTenant = tenant || undefined;
+      request.bridgeAccessToken = token;
+
+      this.configService.log('User authenticated', { userId: user.id, tenantId: user.tenantId });
+    }
+
+    // 7. Require at least one valid credential
+    if (!apiTokenClaims && !user) {
+      this.configService.log('No Authorization header');
+      this.setWwwAuthenticate(
+        response,
+        'Bearer error="missing_token", error_description="No authorization token was provided"',
+      );
+      throw new UnauthorizedException({
+        statusCode: 401,
+        error: 'Unauthorized',
+        message: 'No authorization token was provided',
+      });
+    }
+
+    // 8. API-token privilege check (@RequirePrivilege) — applies when API
+    //    token is present. User JWTs bypass @RequirePrivilege (existing
+    //    backward-compat behavior); they are governed by @RequireRole,
+    //    @RequireFeatureFlag and route-rule privilege below.
     if (apiTokenClaims) {
       const requiredPrivilege = this.getRequiredPrivilege(context);
       if (requiredPrivilege) {
@@ -210,141 +323,61 @@ export class BridgeAuthGuard implements CanActivate {
         }
         this.configService.log('Privilege check passed', { privilege: requiredPrivilege });
       }
-      return true;
     }
 
-    // 7. User JWT path — extract and validate Authorization: Bearer token
-    const authHeader = request.headers.authorization;
-
-    if (authHeader && acceptedType === 'api_token') {
-      this.configService.log('User JWT rejected — endpoint only accepts API tokens');
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="invalid_request", error_description="User JWT authentication is not accepted for this endpoint"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'auth type not accepted',
-      });
-    }
-
-    if (!authHeader) {
-      this.configService.log('No Authorization header');
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="missing_token", error_description="No authorization token was provided"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'No authorization token was provided',
-      });
-    }
-
-    const token = this.extractToken(request);
-    if (!token) {
-      this.configService.log('Authorization header present but malformed');
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="invalid_token", error_description="The access token is invalid"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'Access token missing or invalid',
-      });
-    }
-
-    // 8. Verify user JWT
-    let claims;
-    try {
-      claims = await this.jwksService.verifyToken(token);
-    } catch (error) {
-      if (error instanceof TokenVerificationError) {
-        this.configService.log('Token verification failed', { code: error.code });
-        const mapped = TOKEN_ERROR_MAP[error.code] ?? {
-          error: 'invalid_token',
-          description: 'The access token is invalid',
-        };
-        this.setWwwAuthenticate(
-          response,
-          `Bearer error="${mapped.error}", error_description="${mapped.description}"`,
-        );
-        throw new UnauthorizedException({
-          statusCode: 401,
-          error: 'Unauthorized',
-          message: mapped.description,
-        });
+    // 9. User-JWT-only checks (route rule privilege, role, feature flag)
+    if (user) {
+      // Route-rule privilege for user JWT
+      const rulePrivilege = matchingRule?.privilege;
+      if (rulePrivilege && rulePrivilege !== 'ANONYMOUS' && rulePrivilege !== 'AUTHENTICATED') {
+        const userPrivileges = user.privileges ?? [];
+        if (!userPrivileges.includes(rulePrivilege)) {
+          this.configService.log('Route privilege check failed', {
+            required: rulePrivilege,
+            actual: userPrivileges,
+          });
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'Forbidden',
+            message: `Privilege '${rulePrivilege}' required`,
+          });
+        }
+        this.configService.log('Route privilege check passed', { privilege: rulePrivilege });
       }
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="invalid_token", error_description="The access token is invalid"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'Access token missing or invalid',
-      });
-    }
 
-    // 9. Attach user and tenant to request
-    const user = transformJwtToBridgeUser(claims);
-    const tenant = transformJwtToBridgeTenant(claims);
-
-    request.bridgeUser = user;
-    request.bridgeTenant = tenant || undefined;
-    request.bridgeAccessToken = token;
-
-    this.configService.log('User authenticated', { userId: user.id, tenantId: user.tenantId });
-
-    // 10. Check route-rule privilege for user JWT
-    const rulePrivilege = matchingRule?.privilege;
-    if (rulePrivilege && rulePrivilege !== 'ANONYMOUS' && rulePrivilege !== 'AUTHENTICATED') {
-      const userPrivileges = user.privileges ?? [];
-      if (!userPrivileges.includes(rulePrivilege)) {
-        this.configService.log('Route privilege check failed', {
-          required: rulePrivilege,
-          actual: userPrivileges,
-        });
-        throw new ForbiddenException({
-          statusCode: 403,
-          error: 'Forbidden',
-          message: `Privilege '${rulePrivilege}' required`,
-        });
+      // Role requirement (decorator only) — user JWT only
+      const requiredRole = this.getRequiredRole(context);
+      if (requiredRole) {
+        if (user.role !== requiredRole) {
+          this.configService.log('Role check failed', {
+            required: requiredRole,
+            actual: user.role,
+          });
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'Forbidden',
+            message: `Role '${requiredRole}' required`,
+          });
+        }
+        this.configService.log('Role check passed', { role: requiredRole });
       }
-      this.configService.log('Route privilege check passed', { privilege: rulePrivilege });
-    }
 
-    // 11. Check role requirement (decorator only) — user JWT only
-    const requiredRole = this.getRequiredRole(context);
-    if (requiredRole) {
-      if (user.role !== requiredRole) {
-        this.configService.log('Role check failed', { required: requiredRole, actual: user.role });
-        throw new ForbiddenException({
-          statusCode: 403,
-          error: 'Forbidden',
-          message: `Role '${requiredRole}' required`,
-        });
+      // Feature flag requirement (decorator only) — user JWT only
+      const requiredFlag = this.getRequiredFeatureFlag(context);
+      if (requiredFlag && token) {
+        const flagEnabled = await this.featureFlagService.evaluateRequirement(requiredFlag, token);
+        if (!flagEnabled) {
+          const flagName =
+            typeof requiredFlag === 'string' ? requiredFlag : JSON.stringify(requiredFlag);
+          this.configService.log('Feature flag check failed', { flag: flagName });
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'Forbidden',
+            message: `Feature flag '${flagName}' is not enabled`,
+          });
+        }
+        this.configService.log('Feature flag check passed', { flag: requiredFlag });
       }
-      this.configService.log('Role check passed', { role: requiredRole });
-    }
-
-    // 12. Check feature flag requirement (decorator only) — user JWT only
-    const requiredFlag = this.getRequiredFeatureFlag(context);
-    if (requiredFlag) {
-      const flagEnabled = await this.featureFlagService.evaluateRequirement(requiredFlag, token);
-      if (!flagEnabled) {
-        const flagName =
-          typeof requiredFlag === 'string' ? requiredFlag : JSON.stringify(requiredFlag);
-        this.configService.log('Feature flag check failed', { flag: flagName });
-        throw new ForbiddenException({
-          statusCode: 403,
-          error: 'Forbidden',
-          message: `Feature flag '${flagName}' is not enabled`,
-        });
-      }
-      this.configService.log('Feature flag check passed', { flag: requiredFlag });
     }
 
     return true;

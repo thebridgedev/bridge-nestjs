@@ -434,6 +434,162 @@ describe('BridgeAuthGuard', () => {
     });
   });
 
+  describe('both credentials present (TBP-118)', () => {
+    const mockApiTokenClaims: ApiTokenClaims = {
+      sub: 'token-1',
+      appId: 'test-app-id',
+      tenantId: null,
+      type: 'api',
+      privileges: ['USER_READ', 'TENANT_READ'],
+    };
+
+    it('only Bearer JWT → bridgeUser set, bridgeApiToken unset, returns true', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(null);
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+
+      const ctx = makeContext({ headers: { authorization: 'Bearer user.jwt.token' } });
+      const result = await guard.canActivate(ctx);
+
+      expect(result).toBe(true);
+      const req = ctx.switchToHttp().getRequest() as any;
+      expect(req.bridgeUser).toBeDefined();
+      expect(req.bridgeUser.id).toBe('user-1');
+      expect(req.bridgeApiToken).toBeUndefined();
+      expect(jwksService.verifyApiToken).not.toHaveBeenCalled();
+    });
+
+    it('only x-api-key → bridgeApiToken set, bridgeUser unset, returns true', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(null);
+      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
+
+      const ctx = makeContext({ headers: { 'x-api-key': 'valid.api.token' } });
+      const result = await guard.canActivate(ctx);
+
+      expect(result).toBe(true);
+      const req = ctx.switchToHttp().getRequest() as any;
+      expect(req.bridgeApiToken).toEqual(mockApiTokenClaims);
+      expect(req.bridgeUser).toBeUndefined();
+      expect(jwksService.verifyToken).not.toHaveBeenCalled();
+    });
+
+    it('both Bearer JWT + x-api-key (valid) → BOTH bridgeUser and bridgeApiToken set, returns true', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(null);
+      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+
+      const ctx = makeContext({
+        headers: {
+          authorization: 'Bearer user.jwt.token',
+          'x-api-key': 'valid.api.token',
+        },
+      });
+      const result = await guard.canActivate(ctx);
+
+      expect(result).toBe(true);
+      const req = ctx.switchToHttp().getRequest() as any;
+      // Both contexts populated independently — the TBP-118 fix
+      expect(req.bridgeApiToken).toEqual(mockApiTokenClaims);
+      expect(req.bridgeUser).toBeDefined();
+      expect(req.bridgeUser.id).toBe('user-1');
+      expect(req.bridgeAccessToken).toBe('user.jwt.token');
+      expect(jwksService.verifyApiToken).toHaveBeenCalled();
+      expect(jwksService.verifyToken).toHaveBeenCalled();
+    });
+
+    it('both headers + invalid Bearer → 401 (JWT branch validates even when API key is valid)', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(null);
+      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
+      jwksService.verifyToken.mockRejectedValue(
+        new TokenVerificationError('Token expired', 'TOKEN_EXPIRED'),
+      );
+
+      const ctx = makeContext({
+        headers: {
+          authorization: 'Bearer expired.jwt',
+          'x-api-key': 'valid.api.token',
+        },
+      });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('neither credential → 401 missing_token', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(null);
+
+      const ctx = makeContext({ headers: {} });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+
+      const res = ctx.switchToHttp().getResponse() as any;
+      expect(res._headers['WWW-Authenticate']).toContain('missing_token');
+    });
+
+    it('both headers + route privilege the user satisfies → returns true with both contexts', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/admin/*',
+        privilege: 'TENANT_WRITE',
+      });
+      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
+      jwksService.verifyToken.mockResolvedValue({
+        ...mockClaims,
+        privileges: ['TENANT_WRITE'],
+      } as any);
+
+      const ctx = makeContext({
+        path: '/admin/users',
+        headers: {
+          authorization: 'Bearer user.jwt.token',
+          'x-api-key': 'valid.api.token',
+        },
+      });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      const req = ctx.switchToHttp().getRequest() as any;
+      expect(req.bridgeApiToken).toEqual(mockApiTokenClaims);
+      expect(req.bridgeUser).toBeDefined();
+    });
+
+    it('both headers + route privilege the user lacks → 403 (JWT-side privilege denial still enforced)', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/admin/*',
+        privilege: 'TENANT_WRITE',
+      });
+      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any); // no privileges
+
+      const ctx = makeContext({
+        path: '/admin/users',
+        headers: {
+          authorization: 'Bearer user.jwt.token',
+          'x-api-key': 'valid.api.token',
+        },
+      });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('both headers + @RequirePrivilege the API token lacks → 403 (API-side privilege denial still enforced)', async () => {
+      reflector.getAllAndOverride
+        .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
+        .mockReturnValueOnce(undefined) // ACCEPT_AUTH_KEY
+        .mockReturnValueOnce('ADMIN_WRITE'); // REQUIRED_PRIVILEGE_KEY
+      configService.findMatchingRule.mockReturnValue(null);
+      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims); // privileges: USER_READ, TENANT_READ
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+
+      const ctx = makeContext({
+        headers: {
+          authorization: 'Bearer user.jwt.token',
+          'x-api-key': 'valid.api.token',
+        },
+      });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
   describe('@AcceptAuth decorator', () => {
     const mockApiTokenClaims: ApiTokenClaims = {
       sub: 'token-1',
@@ -491,6 +647,31 @@ describe('BridgeAuthGuard', () => {
       const ctx = makeContext({ headers: { authorization: 'Bearer user.jwt.token' } });
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
       expect(jwksService.verifyToken).toHaveBeenCalled();
+    });
+
+    it('@AcceptAuth("jwt") + BOTH Bearer JWT + x-api-key → 200 (TBP-118: API key ignored, JWT honored)', async () => {
+      // cloud-views always sends both headers. With @AcceptAuth('jwt'), the
+      // guard must NOT reject — it should route through the JWT branch and
+      // ignore the api-key (which is just app context).
+      reflector.getAllAndOverride
+        .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
+        .mockReturnValueOnce('jwt')     // ACCEPT_AUTH_KEY
+        .mockReturnValueOnce(undefined) // REQUIRED_ROLE_KEY
+        .mockReturnValueOnce(undefined); // REQUIRED_FEATURE_FLAG_KEY
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+
+      const ctx = makeContext({
+        headers: {
+          authorization: 'Bearer user.jwt.token',
+          'x-api-key': 'valid.api.token',
+        },
+      });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      const req = ctx.switchToHttp().getRequest() as any;
+      expect(req.bridgeUser).toBeDefined();
+      expect(req.bridgeUser.id).toBe('user-1');
+      // verifyApiToken is skipped under @AcceptAuth('jwt') + Bearer present
+      expect(jwksService.verifyApiToken).not.toHaveBeenCalled();
     });
   });
 });
