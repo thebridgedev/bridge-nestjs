@@ -32,6 +32,11 @@ export class BridgeConfigService {
     return this.config.appId;
   }
 
+  /** Public read of the resolved API base URL (used by the unified BridgeService). */
+  get apiBaseUrl(): string {
+    return this.config.apiBaseUrl;
+  }
+
   /** Derived: ${apiBaseUrl}/auth — used for JWT issuer validation */
   get authBaseUrl(): string {
     return `${this.config.apiBaseUrl}/auth`;

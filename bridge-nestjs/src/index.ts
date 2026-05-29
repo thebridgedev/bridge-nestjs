@@ -20,6 +20,19 @@ export type { ApiTokenClaims } from './services/jwks.service';
 export { FeatureFlagService } from './services/feature-flag.service';
 export { BridgeHttpService, BridgeHttpError } from './services/bridge-http.service';
 
+// TBP-341 — Unified backend bridge surface (`bridge.fromJwt(jwt)` → TenantScope).
+export {
+  BridgeService,
+  TenantScope,
+  BRIDGE_OPTIONS,
+  type BridgeModuleOptions,
+  type BrandingSnapshot,
+  type SessionSnapshotData,
+  type SubscriptionSnapshot,
+  type TenantEntitlementsView,
+  type UserSnapshot,
+} from './bridge';
+
 // Types
 export type {
   BridgeConfig,
