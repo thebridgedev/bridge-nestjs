@@ -297,6 +297,40 @@ Recommended client handling:
 }
 ```
 
+## Runtime mode — channel vs pull (Phase 6, TBP-290)
+
+`BridgeFlagsModule.forRoot({...})` accepts a `runtimeMode` option that picks how the SDK stays fresh:
+
+- **`'channel'`** (default) — opens a WebSocket to the per-app realtime channel. Use for **long-running services** (NestJS HTTP servers, workers) where live flag/quota/entitlement updates matter.
+- **`'pull'`** — never opens a WebSocket. Use for **ephemeral runtimes** (cron jobs, serverless functions, webhook handlers, CLI scripts). Reads go through a TTL-bounded REST cache (`BridgePullCache`, default 30s TTL) so close-in-time reads dedupe.
+
+```ts
+BridgeFlagsModule.forRoot({
+  apiBaseUrl: 'https://api.thebridge.dev',
+  apiKey: process.env.BRIDGE_API_KEY!,
+  runtimeMode: 'pull',
+  pullCache: { ttlMs: 60_000 }, // override default 30s
+});
+```
+
+The pull cache is also injectable in channel mode for REST routes that aren't channel-mirrored:
+
+```ts
+import { Inject, Injectable } from '@nestjs/common';
+import { BRIDGE_PULL_CACHE, BridgePullCache } from '@nebulr-group/bridge-nestjs/flags';
+
+@Injectable()
+export class ReportsService {
+  constructor(@Inject(BRIDGE_PULL_CACHE) private readonly cache: BridgePullCache) {}
+
+  async tenantConfig(tenantId: string) {
+    return this.cache.get(`tenant:${tenantId}`, () => this.fetchFromRest(tenantId));
+  }
+}
+```
+
+In `'pull'` mode, `bridge.events.handle({...})` is a no-op — push events don't exist. For server-side reactions in pull mode, use Bridge webhooks instead.
+
 ## License
 
 MIT
