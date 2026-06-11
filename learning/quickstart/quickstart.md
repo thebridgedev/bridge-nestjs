@@ -65,7 +65,7 @@ export class AppModule {}
 
 All routes are now protected by default, with the exceptions you defined.
 
-> **Note:** Role-based access (`@RequireRole()`) and feature flags (`@RequireFeatureFlag()`) are applied via decorators on controllers/routes, not in route rules. See the [examples documentation](../examples/examples.md) for details.
+> **Note:** Role-based access (`@RequireRole()`) and feature flags (`@RequireFlag()` from `@nebulr-group/bridge-nestjs/flags`) are applied via decorators on controllers/routes, not in route rules. See the [feature flags documentation](../feature-flags/feature-flags.md) for details.
 
 ## Accessing the authenticated user
 

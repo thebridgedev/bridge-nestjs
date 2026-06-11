@@ -1,106 +1,165 @@
 # Feature Flags
 
-Feature flags are enforced via the `@RequireFeatureFlag()` decorator. Feature flags are **not** part of route rules — they are decorator-only.
+Bridge Feature Flags evaluates locally — the module keeps the flag rules in memory, evaluates against in-process context, and receives rule changes live. A flag check is a synchronous O(1) lookup: no network call, no `await`, safe in hot request paths.
 
-### Single flag, any, and all requirements
+Flags work standalone: `BridgeFlagsModule` is auth-free and does not require any other Bridge module.
 
-```typescript
-import { Controller, Get } from '@nestjs/common';
-import { RequireFeatureFlag, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
-
-@Controller('features')
-export class FeaturesController {
-  // Single flag — must be enabled
-  @Get('new-dashboard')
-  @RequireFeatureFlag('beta-dashboard')
-  getNewDashboard(@CurrentUser() user: BridgeUser) {
-    return { dashboard: 'beta version' };
-  }
-
-  // ALL — every flag must be enabled
-  @Get('premium-reports')
-  @RequireFeatureFlag({ all: ['premium-tier', 'reports-v2'] })
-  getPremiumReports(@CurrentUser() user: BridgeUser) {
-    return { reports: 'premium data' };
-  }
-
-  // ANY — at least one flag must be enabled
-  @Get('experimental')
-  @RequireFeatureFlag({ any: ['beta-tester', 'internal-user'] })
-  getExperimental(@CurrentUser() user: BridgeUser) {
-    return { feature: 'experimental' };
-  }
-}
-```
-
-The `FeatureFlagRequirement` type:
+### Setup
 
 ```typescript
-type FeatureFlagRequirement =
-  | string                 // Single flag name
-  | { any: string[] }     // At least one must be enabled
-  | { all: string[] };    // All must be enabled
+// app.module.ts
+import { Module } from '@nestjs/common';
+import { BridgeFlagsModule } from '@nebulr-group/bridge-nestjs/flags';
+
+@Module({
+  imports: [
+    BridgeFlagsModule.forRoot({
+      apiBaseUrl: 'https://api.thebridge.dev',
+      apiKey: process.env.BRIDGE_API_KEY!,
+    }),
+  ],
+})
+export class AppModule {}
 ```
 
-### Programmatic feature flag checks
+`forRootAsync` is available when the API key comes from `ConfigModule`. The module is `@Global()` — register once, inject anywhere.
 
-Inject `FeatureFlagService` for runtime checks:
+### Programmatic checks — BridgeFlagsService
 
 ```typescript
 import { Injectable } from '@nestjs/common';
-import { FeatureFlagService } from '@nebulr-group/bridge-nestjs';
+import { BridgeFlagsService } from '@nebulr-group/bridge-nestjs/flags';
 
 @Injectable()
 export class ReportsService {
-  constructor(private readonly featureFlags: FeatureFlagService) {}
+  constructor(private readonly flags: BridgeFlagsService) {}
 
-  async generateReport(accessToken: string) {
-    // Check single flag
-    const hasPdfExport = await this.featureFlags.isEnabled('pdf-export', accessToken);
-
-    // Check with requirement object
-    const hasPremium = await this.featureFlags.evaluateRequirement(
-      { all: ['premium-tier', 'active-subscription'] },
-      accessToken,
-    );
-
-    // Bulk evaluate all flags for a user
-    const allFlags = await this.featureFlags.bulkEvaluate(accessToken);
-    // Returns Map<string, boolean>
-
-    if (hasPdfExport) {
-      return this.generatePdfReport();
+  generate(userId: string) {
+    // Synchronous — local evaluation, no network call
+    if (this.flags.flag('use_new_pipeline', false, { identity: userId })) {
+      return this.generateV2();
     }
-    return this.generateBasicReport();
+    return this.generateV1();
   }
 }
 ```
 
-In a controller, get the access token from the request:
+`flag<T>(key, defaultValue, context?)` returns the evaluated value, typed from your default (`boolean` | `string` | `number` | JSON object). The default is mandatory — it's what you get when the flag isn't configured or Bridge is unreachable. A flag call can never break your app.
+
+### Identity on the backend
+
+A server process is not "a user," so the SDK never invents an identity — you pass one per eval (or per request scope):
 
 ```typescript
-import { Controller, Get, Req } from '@nestjs/common';
-import { CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
-import { Request } from 'express';
+// On behalf of the requesting user
+this.flags.flag('feature_x', false, { identity: req.user.id });
 
-@Controller('reports')
-export class ReportsController {
-  constructor(private readonly reportsService: ReportsService) {}
+// Sticky per-tenant behavior (webhooks, queues)
+this.flags.flag('new_pipeline', false, { identity: tenantId });
 
+// System-level flag, no identity
+this.flags.flag('worker_v2_enabled', false);
+```
+
+**Percentage rollouts require identity.** If a rollout rule is active and no identity is passed, the SDK refuses the rollout and returns the safe default with a warning — it will not silently randomize per call.
+
+### Route guards — @RequireFlag
+
+Gate handlers on a flag with the guard + decorator pair:
+
+```typescript
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { RequireFlag, BridgeFlagGuard } from '@nebulr-group/bridge-nestjs/flags';
+
+@Controller('exports')
+@UseGuards(BridgeFlagGuard)
+export class ExportsController {
   @Get()
-  async getReport(
-    @CurrentUser() user: BridgeUser,
-    @Req() req: Request,
-  ) {
-    return this.reportsService.generateReport(req.bridgeAccessToken!);
+  @RequireFlag('exports_enabled')
+  list() { /* … */ }
+
+  // Non-boolean flags: gate on a specific value
+  @Get('beta')
+  @RequireFlag('export_mode', 'v1', { equals: 'v2' })
+  betaExport() { /* … */ }
+}
+```
+
+`RequireFlag(key, defaultValue = false, options?)` — `options.equals` gates non-boolean flags on a specific value; `options.optional: true` skips the guard instead of rejecting (useful for kill switches that should disable a route without 403'ing).
+
+### Flag values as handler parameters — @Flag
+
+```typescript
+import { Controller, Get } from '@nestjs/common';
+import { Flag } from '@nebulr-group/bridge-nestjs/flags';
+
+@Controller('home')
+export class HomeController {
+  @Get()
+  home(@Flag({ key: 'show_new_home', defaultValue: false }) showNew: boolean) {
+    return showNew ? this.newHome() : this.classicHome();
   }
 }
 ```
 
-### Cache behavior
+For typed reusable params, wrap with `useFlagParam<T>(key, defaultValue)`.
 
-`FeatureFlagService` caches flag evaluations per access token with a 5-minute TTL. The first call for a user triggers a `bulkEvaluate` API call, which populates the cache for all flags. Subsequent calls within the TTL window are served from cache.
+### Frontend context propagation — BridgeContextInterceptor
 
-- `isEnabled(flag, token)` — checks cache, then bulk evaluates, then single-flag fallback
-- `isEnabled(flag, token, true)` — bypasses cache (`forceLive` parameter)
-- `clearCache()` — clears all cached flags
+When your frontend also evaluates flags for the same user, both sides must agree on identity or buckets split-brain. The frontend Bridge SDKs send the eval context in the `x-bridge-context` header; `BridgeContextInterceptor` reads it and binds it to the request, so guard checks, `@Flag` params, and request-scoped evals automatically use the same identity the frontend used:
+
+```typescript
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { BridgeContextInterceptor } from '@nebulr-group/bridge-nestjs/flags';
+
+@Module({
+  providers: [{ provide: APP_INTERCEPTOR, useClass: BridgeContextInterceptor }],
+})
+export class AppModule {}
+```
+
+Missing or malformed headers are a no-op — the request falls back to the module's global context.
+
+**Security rule:** the propagated context should carry identity and custom attributes only. Never trust client-sent `role`/`plan` attributes — read those from server-side sources (see attribute providers below).
+
+### Bridge-managed attributes
+
+To target rules on verified auth state (`bridge:user.role`, `bridge:tenant.plan`), register an `AuthAttributeProvider` that reads your verified JWT claims:
+
+```typescript
+import { AuthAttributeProvider } from '@nebulr-group/bridge-auth-core';
+
+// once at bootstrap
+this.flags.bridge.registerAttributeProvider(
+  new AuthAttributeProvider({ getClaims: () => getCurrentClaims() }),
+);
+```
+
+Providers are consulted synchronously on every eval; dev-supplied attributes win on key collision (the admin UI surfaces collisions).
+
+### Pull mode
+
+Runtimes that can't hold a live connection can use the pull cache (`BridgePullCache`, default TTL 30 s) — inject via `@Inject(BRIDGE_PULL_CACHE)`. Evals stay local; the rule set refreshes by polling instead of push.
+
+### Multi-type values
+
+```typescript
+const maxUploads = this.flags.flag('max_uploads', 10);                       // number
+const mode       = this.flags.flag('pipeline_mode', 'stable');               // string
+const rateLimit  = this.flags.flag('rate_limit', { window: 60, max: 100 }); // JSON
+```
+
+A type mismatch (admin stored a different type than your default suggests) returns the default and logs a warning.
+
+---
+
+### Legacy (1.x) API
+
+The pre-2.0 surface was server-evaluated and token-based:
+
+```typescript
+@RequireFeatureFlag({ all: ['premium-tier', 'reports-v2'] })   // decorator
+await this.featureFlags.isEnabled('pdf-export', accessToken);  // service, async, 5-min cache
+```
+
+`RequireFeatureFlag` (with `any`/`all` requirement objects), `FeatureFlagService.isEnabled/evaluateRequirement/bulkEvaluate`, and the per-token 5-minute cache remain available for boolean flags during migration. New code should use `@RequireFlag` / `BridgeFlagsService.flag()` — synchronous, multi-type, live-updating, and no cache TTL to reason about.
