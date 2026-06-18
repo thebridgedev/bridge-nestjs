@@ -39,7 +39,8 @@ import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from 'jose';
 
 const mockConfigService = {
   jwksUrl: 'https://auth.example.com/.well-known/jwks.json',
-  apiTokenJwksUrl: 'https://auth.example.com/account/app/.well-known/jwks.json',
+  introspectionUrl: 'https://auth.example.com/account/api-token/introspect',
+  introspectionCacheTtlMs: 0,
   authBaseUrl: 'https://auth.example.com',
   appId: 'test-app',
   log: jest.fn(),
@@ -113,67 +114,87 @@ describe('JwksService', () => {
     });
   });
 
-  describe('verifyApiToken', () => {
-    it('should use apiTokenJwksUrl, not the user JWKS URL', async () => {
-      const claims = {
-        sub: 'token-1',
-        appId: 'test-app',
-        tenantId: null,
-        type: 'api',
-        privileges: ['USER_READ'],
-      };
-      (jwtVerify as jest.Mock).mockResolvedValue({ payload: claims });
+  describe('verifyApiToken (introspection)', () => {
+    // API tokens are now verified by POSTing to the Bridge introspection
+    // endpoint (global fetch), NOT via JWKS. Mock global fetch for these.
+    let fetchMock: jest.Mock;
 
-      await service.verifyApiToken('api.token.here', 'test-app');
-
-      // The second createRemoteJWKSet call should use the apiTokenJwksUrl
-      expect(createRemoteJWKSet).toHaveBeenCalledWith(
-        new URL('https://auth.example.com/account/app/.well-known/jwks.json'),
-      );
+    beforeEach(() => {
+      fetchMock = jest.fn();
+      (global as any).fetch = fetchMock;
     });
 
-    it('should throw APP_MISMATCH when payload.appId !== expectedAppId', async () => {
-      (jwtVerify as jest.Mock).mockResolvedValue({
-        payload: {
+    const introspectionResponse = (body: unknown, ok = true, status = 200) =>
+      ({ ok, status, json: async () => body }) as unknown as Response;
+
+    it('POSTs the token to the introspection URL and returns claims', async () => {
+      fetchMock.mockResolvedValue(
+        introspectionResponse({
+          active: true,
+          sub: 'token-1',
+          appId: 'test-app',
+          tenantId: null,
+          type: 'api',
+          privileges: ['USER_READ'],
+        }),
+      );
+
+      const claims = await service.verifyApiToken('api.token.here', 'test-app');
+
+      expect(claims).toMatchObject({ appId: 'test-app', privileges: ['USER_READ'] });
+      const [url, init] = fetchMock.mock.calls[0];
+      expect(url).toBe('https://auth.example.com/account/api-token/introspect');
+      expect(init.method).toBe('POST');
+      expect(JSON.parse(init.body)).toEqual({ token: 'api.token.here' });
+    });
+
+    it('throws TOKEN_INVALID when introspection reports inactive', async () => {
+      fetchMock.mockResolvedValue(introspectionResponse({ active: false }));
+
+      await expect(service.verifyApiToken('dead.token', 'test-app')).rejects.toMatchObject({
+        code: 'TOKEN_INVALID',
+      });
+    });
+
+    it('throws APP_MISMATCH when the token belongs to a different app', async () => {
+      fetchMock.mockResolvedValue(
+        introspectionResponse({
+          active: true,
           sub: 'token-1',
           appId: 'other-app',
           tenantId: null,
           type: 'api',
           privileges: [],
-        },
-      });
+        }),
+      );
 
       await expect(service.verifyApiToken('api.token.here', 'test-app')).rejects.toMatchObject({
         code: 'APP_MISMATCH',
       });
     });
 
-    it('API token JWKS client is cached independently from the user JWKS client', async () => {
-      const claims = {
-        sub: 'token-1',
-        appId: 'test-app',
-        tenantId: null,
-        type: 'api',
-        privileges: [],
-      };
-      (jwtVerify as jest.Mock).mockResolvedValue({ payload: { sub: 'user-1' } });
-      await service.verifyToken('user.token');
+    it('throws UNKNOWN_ERROR when the introspection request fails', async () => {
+      fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
 
-      (jwtVerify as jest.Mock).mockResolvedValue({ payload: claims });
+      await expect(service.verifyApiToken('api.token.here', 'test-app')).rejects.toMatchObject({
+        code: 'UNKNOWN_ERROR',
+      });
+    });
+
+    it('does NOT touch the user JWKS path (createRemoteJWKSet not called)', async () => {
+      fetchMock.mockResolvedValue(
+        introspectionResponse({
+          active: true,
+          sub: 'token-1',
+          appId: 'test-app',
+          tenantId: null,
+          type: 'api',
+          privileges: [],
+        }),
+      );
+
       await service.verifyApiToken('api.token.here', 'test-app');
-      await service.verifyApiToken('api.token2.here', 'test-app');
-
-      // User JWKS: 1 call (user JWKS URL), API token JWKS: 1 call (api token JWKS URL)
-      // Total: 2 calls to createRemoteJWKSet
-      expect(createRemoteJWKSet).toHaveBeenCalledTimes(2);
-      expect(createRemoteJWKSet).toHaveBeenNthCalledWith(
-        1,
-        new URL('https://auth.example.com/.well-known/jwks.json'),
-      );
-      expect(createRemoteJWKSet).toHaveBeenNthCalledWith(
-        2,
-        new URL('https://auth.example.com/account/app/.well-known/jwks.json'),
-      );
+      expect(createRemoteJWKSet).not.toHaveBeenCalled();
     });
   });
 });

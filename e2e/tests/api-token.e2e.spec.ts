@@ -51,14 +51,17 @@ class ApiTokenTestController {
 
 async function createApiToken(
   testDataApiUrl: string,
-  appApiKey: string,
+  bearerToken: string,
   privileges: string[],
 ): Promise<string> {
+  // Minting an API token requires authenticating as an OWNER/ADMIN of the app —
+  // exactly how a developer creates one via the Bridge API. We use the owner
+  // user's access token (Authorization: Bearer), which beforeAll already minted.
   const res = await fetch(`${testDataApiUrl}/account/api-token/app`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': appApiKey,
+      Authorization: `Bearer ${bearerToken}`,
     },
     body: JSON.stringify({ name: `E2E test token ${Date.now()}`, privileges }),
   });
@@ -93,29 +96,30 @@ describe('API token authentication (E2E)', () => {
     testDataClient = new TestDataClient(config);
     authClient = new AuthClient(config.authBaseUrl, config.appId);
 
-    // Create a test user and get a user JWT (for backward compat tests)
+    // Create a test user and get a user JWT. A freshly created account owns its
+    // own tenant (role OWNER), which authorizes it to mint API tokens for the app.
     account = await testDataClient.createTestAccount();
     userAccessToken = (await authClient.getToken(account.email, account.password)).accessToken;
 
-    // Create API tokens via bridge-api
+    // Mint API tokens via bridge-api, authenticating as the owner (Bearer JWT).
     apiTokenWithPrivilege = await createApiToken(
       config.testDataApiUrl,
-      config.testDataApiKey,
+      userAccessToken,
       ['USER_READ'],
     );
     apiTokenWithoutPrivilege = await createApiToken(
       config.testDataApiUrl,
-      config.testDataApiKey,
+      userAccessToken,
       ['TENANT_READ'],
     );
-    apiTokenEmpty = await createApiToken(config.testDataApiUrl, config.testDataApiKey, []);
+    apiTokenEmpty = await createApiToken(config.testDataApiUrl, userAccessToken, []);
 
     // Build a test NestJS app with BridgeModule wired to the real bridge-api JWKS
     const moduleFixture = await Test.createTestingModule({
       imports: [
         BridgeModule.forRoot({
           appId: config.appId,
-          authBaseUrl: config.testDataApiUrl,
+          apiBaseUrl: config.testDataApiUrl,
           guard: { global: false },
         }),
       ],
@@ -178,21 +182,21 @@ describe('Privilege enforcement (E2E)', () => {
 
     tokenWithPrivilege = await createApiToken(
       config.testDataApiUrl,
-      config.testDataApiKey,
+      userAccessToken,
       ['USER_READ'],
     );
     tokenMissingPrivilege = await createApiToken(
       config.testDataApiUrl,
-      config.testDataApiKey,
+      userAccessToken,
       ['TENANT_READ'],
     );
-    tokenEmptyPrivileges = await createApiToken(config.testDataApiUrl, config.testDataApiKey, []);
+    tokenEmptyPrivileges = await createApiToken(config.testDataApiUrl, userAccessToken, []);
 
     const moduleFixture = await Test.createTestingModule({
       imports: [
         BridgeModule.forRoot({
           appId: config.appId,
-          authBaseUrl: config.testDataApiUrl,
+          apiBaseUrl: config.testDataApiUrl,
           guard: { global: false },
         }),
       ],

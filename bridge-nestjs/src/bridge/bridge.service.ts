@@ -31,24 +31,20 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { BridgePullCache } from '@nebulr-group/bridge-auth-core';
+import { getTenantId, getTenantUserId } from '@nebulr-group/bridge-auth-core/backend';
 
 import { BRIDGE_PULL_CACHE } from '../flags/flags.tokens';
 import { BRIDGE_OPTIONS, type BridgeModuleOptions } from './bridge.tokens';
 import { TenantScope } from './tenant-scope';
 
 function decodeJwtSub(jwt: string): string {
-  // Best-effort: pluck `sub` for cache keying. We don't verify signature
-  // here — that's the bridge-api's job at the receiving end. The cache key
-  // only needs to be stable per JWT.
-  const part = jwt.split('.')[1];
-  if (!part) return jwt; // malformed; fall back to the whole string
-  try {
-    const json = Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-    const claims = JSON.parse(json) as { sub?: string; tid?: string };
-    return claims.tid ? `${claims.tid}:${claims.sub ?? ''}` : (claims.sub ?? jwt);
-  } catch {
-    return jwt;
-  }
+  // Best-effort: build a stable cache key from the JWT's tenant/user claims.
+  // We don't verify the signature here — that's the bridge-api's job at the
+  // receiving end. The cache key only needs to be stable per JWT.
+  const tid = getTenantId(jwt);
+  const sub = getTenantUserId(jwt);
+  if (tid) return `${tid}:${sub ?? ''}`;
+  return sub ?? jwt;
 }
 
 @Injectable()

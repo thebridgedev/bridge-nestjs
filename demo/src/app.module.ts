@@ -10,23 +10,22 @@ import { ForwardController } from './forward/forward.controller';
   imports: [
     BridgeModule.forRoot({
       appId: process.env.BRIDGE_APP_ID || 'demo-app-id',
-      authBaseUrl: process.env.BRIDGE_AUTH_BASE_URL,
-      backendlessBaseUrl: process.env.BRIDGE_BACKENDLESS_BASE_URL,
+      apiBaseUrl: process.env.BRIDGE_API_BASE_URL,
       debug: process.env.BRIDGE_DEBUG === 'true',
       guard: {
         global: true,
         defaultAccess: 'protected',
         rules: [
-          // Public routes
-          { path: '/health', public: true },
-          { path: '/api/public/*', public: true },
-          
-          // Role-based routes
-          { path: '/admin/*', role: 'ADMIN' },
-          
-          // Feature flag routes
-          { path: '/beta/*', featureFlag: 'beta-access' },
-          { path: '/premium/*', featureFlag: { all: ['premium-tier', 'active-subscription'] } },
+          // Public routes — only ANONYMOUS/privilege/plan rules belong in central
+          // guard config. Role and feature-flag gating live on the controllers
+          // (see @RequireRole / @RequireFeatureFlag below).
+          { path: '/health', privilege: 'ANONYMOUS' },
+          { path: '/api/public/*', privilege: 'ANONYMOUS' },
+
+          // Role gating → @RequireRole('ADMIN') on AdminController.
+          // Feature-flag gating → @RequireFeatureFlag('beta-access') on BetaController.
+          // /premium/* has no dedicated controller, so there is no central rule for
+          // it; gate premium endpoints with @RequireFeatureFlag(...) on their controller.
         ],
       },
     }),

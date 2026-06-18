@@ -77,11 +77,22 @@ export interface BridgeConfig {
   debug?: boolean;
 
   /**
-   * Override the JWKS URL for API token verification.
-   * Useful in Docker when the container can't reach the public apiBaseUrl.
-   * @default {apiBaseUrl}/auth/account/app/.well-known/jwks.json
+   * Override the token-introspection URL for API token verification.
+   * API tokens are signed with the per-app HS256 secret (which this app never
+   * holds), so they are verified by POSTing them to the Bridge rather than
+   * locally. Override this in Docker when the container can't reach the public
+   * apiBaseUrl.
+   * @default {apiBaseUrl}/account/api-token/introspect
    */
-  apiTokenJwksUrl?: string;
+  introspectionUrl?: string;
+
+  /**
+   * How long (ms) a successful API-token introspection is cached, keyed by
+   * token. Trades revocation latency for fewer network calls. `0` disables
+   * caching → every request introspects (instant revocation).
+   * @default 0
+   */
+  introspectionCacheTtlMs?: number;
 
   /**
    * Override the JWKS URL for user JWT verification.

@@ -25,13 +25,28 @@ module.exports = {
   globalSetup: '<rootDir>/e2e/global-setup.js',
   globalTeardown: '<rootDir>/e2e/global-teardown.js',
 
+  // auth-core ships as native ESM (`"type": "module"`). Mirror jest.config.js
+  // (unit) so Jest's CJS runner can load it without switching this project to
+  // ESM: (1) transform `.js/.mjs` too — not just `.ts` — so auth-core's emitted
+  // ESM is down-leveled; (2) whitelist the package in transformIgnorePatterns
+  // so Jest stops skipping it in node_modules; (3) strip NodeNext `.js`
+  // suffixes from auth-core's internal subpath imports. Without these, every
+  // e2e spec crashes at module-load with `SyntaxError: Unexpected token 'export'`.
   transform: {
-    '^.+\\.tsx?$': [
+    '^.+\\.[jt]sx?$': [
       'ts-jest',
       {
         tsconfig: '<rootDir>/tsconfig.e2e.json',
+        useESM: false,
+        isolatedModules: true,
       },
     ],
+  },
+  transformIgnorePatterns: [
+    'node_modules/(?!(@nebulr-group/bridge-auth-core)/)',
+  ],
+  moduleNameMapper: {
+    '^@nebulr-group/bridge-auth-core/(.*)\\.js$': '@nebulr-group/bridge-auth-core/$1',
   },
 
   // E2E tests are slower than unit tests — allow up to 30s per test

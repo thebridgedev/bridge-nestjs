@@ -153,13 +153,15 @@ A type mismatch (admin stored a different type than your default suggests) retur
 
 ---
 
-### Legacy (1.x) API
+### On-demand checks over the Bridge API
 
-The pre-2.0 surface was server-evaluated and token-based:
+`@RequireFlag` / `BridgeFlagsService` (above) evaluate locally and receive live updates. If you'd rather not run a flags client — for simple route gating or an occasional check — `@RequireFeatureFlag` / `FeatureFlagService` evaluate flags on demand over the Bridge API instead, keyed on the user's access token, with a 5-minute per-token cache:
 
 ```typescript
 @RequireFeatureFlag({ all: ['premium-tier', 'reports-v2'] })   // decorator
 await this.featureFlags.isEnabled('pdf-export', accessToken);  // service, async, 5-min cache
 ```
 
-`RequireFeatureFlag` (with `any`/`all` requirement objects), `FeatureFlagService.isEnabled/evaluateRequirement/bulkEvaluate`, and the per-token 5-minute cache remain available for boolean flags during migration. New code should use `@RequireFlag` / `BridgeFlagsService.flag()` — synchronous, multi-type, live-updating, and no cache TTL to reason about.
+`@RequireFeatureFlag` (with `any`/`all` requirement objects) and `FeatureFlagService.isEnabled / evaluateRequirement / bulkEvaluate` work with boolean flags.
+
+**Which to use:** reach for `@RequireFlag` / `BridgeFlagsService.flag()` when you want synchronous, multi-type, live-updating evaluation; reach for `@RequireFeatureFlag` / `FeatureFlagService` when you just need a quick boolean check and don't want to run a flags client.
