@@ -29,7 +29,9 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
  * })
  * export class AppModule {}
  * 
- * // With global guard and route rules
+ * // With global guard and route rules.
+ * // Central rules express privilege/plan only. Role gating uses @RequireRole
+ * // and feature-flag gating uses @RequireFeatureFlag on the controller/route.
  * @Module({
  *   imports: [
  *     BridgeModule.forRoot({
@@ -38,9 +40,9 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
  *         global: true,
  *         defaultAccess: 'protected',
  *         rules: [
- *           { path: '/health', public: true },
- *           { path: '/admin/*', role: 'ADMIN' },
- *           { path: '/beta/*', featureFlag: 'beta-access' },
+ *           { path: '/health', privilege: 'ANONYMOUS' },
+ *           { path: '/account/users', privilege: 'USER_READ' },
+ *           { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
  *         ],
  *       },
  *     }),

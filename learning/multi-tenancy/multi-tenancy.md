@@ -1,5 +1,8 @@
 # Multi-Tenancy Patterns
 
+> Looking for the current tenant's subscription, entitlements, or branding inside a request? See
+> [Tenant Data — `BridgeService`](../bridge-service/bridge-service.md) (`bridge.fromJwt(jwt)`).
+
 ### Data separation strategies
 
 **1. Column-based separation (recommended for most cases)**

@@ -23,6 +23,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
+import { TEST_APP_URL } from './config/test-app';
 
 // Load existing .env.test.local (if any) so we don't clobber other vars
 const envFilePath = path.join(__dirname, 'config', '.env.test.local');
@@ -78,7 +79,7 @@ async function main() {
         appName: 'bridge-nestjs E2E Test App',
         ownerEmail: `bridge-nestjs-e2e-owner@thebridge.io`,
         ownerPassword: 'helloworld',
-        appUrl: 'http://localhost:3099',
+        appUrl: TEST_APP_URL,
       }),
     },
   );

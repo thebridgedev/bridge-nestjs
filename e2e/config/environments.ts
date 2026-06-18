@@ -9,7 +9,7 @@ export interface EnvironmentConfig {
   authBaseUrl: string;
   /** API URL for test data operations (bridge-api base URL, no /auth suffix) */
   testDataApiUrl: string;
-  /** API key for test data service authentication */
+  /** API key for test data service authentication (x-playwright-api-key) */
   testDataApiKey: string;
   /** Bridge App ID used by the demo app */
   appId: string;

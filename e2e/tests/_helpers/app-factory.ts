@@ -39,22 +39,10 @@ import { AppModule } from '../../../demo/src/app.module';
  * to free ports and connections.
  */
 export async function createTestApp(): Promise<INestApplication> {
-  // BRIDGE_APP_ID must match the test app created by pre-setup.ts.
-  // Jest's setupFiles (load-test-env.ts) loads it from .env.test.local.
-  process.env.BRIDGE_APP_ID = process.env.BRIDGE_TEST_APP_ID;
-
-  // Use local auth base URL if provided (for tests against local bridge-api)
-  if (process.env.LOCAL_AUTH_BASE_URL) {
-    process.env.BRIDGE_AUTH_BASE_URL = process.env.LOCAL_AUTH_BASE_URL.replace(
-      /\/auth$/,
-      '',
-    );
-  }
-  if (process.env.LOCAL_TEST_DATA_API_URL) {
-    process.env.BRIDGE_BACKENDLESS_BASE_URL =
-      process.env.LOCAL_TEST_DATA_API_URL;
-  }
-
+  // NOTE: BRIDGE_APP_ID / BRIDGE_API_BASE_URL are set in e2e/load-test-env.ts
+  // (Jest setupFiles), which runs BEFORE app.module.ts is imported. They must
+  // NOT be set here — the demo's BridgeModule.forRoot() reads them at import
+  // time, which is already past by the time this function runs.
   const moduleFixture = await Test.createTestingModule({
     imports: [AppModule],
   }).compile();

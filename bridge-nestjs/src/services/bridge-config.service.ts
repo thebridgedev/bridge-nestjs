@@ -13,7 +13,8 @@ export class BridgeConfigService {
     apiBaseUrl: string;
     debug: boolean;
     guard: BridgeConfig['guard'];
-    apiTokenJwksUrl: string | undefined;
+    introspectionUrl: string | undefined;
+    introspectionCacheTtlMs: number | undefined;
     userJwksUrl: string | undefined;
   };
 
@@ -23,7 +24,8 @@ export class BridgeConfigService {
       apiBaseUrl: config.apiBaseUrl || BRIDGE_DEFAULTS.apiBaseUrl,
       debug: config.debug ?? BRIDGE_DEFAULTS.debug,
       guard: config.guard,
-      apiTokenJwksUrl: config.apiTokenJwksUrl,
+      introspectionUrl: config.introspectionUrl,
+      introspectionCacheTtlMs: config.introspectionCacheTtlMs,
       userJwksUrl: config.userJwksUrl,
     };
   }
@@ -72,14 +74,20 @@ export class BridgeConfigService {
   }
 
   /**
-   * JWKS URL for API token verification.
-   * Uses apiTokenJwksUrl override if configured, otherwise derived from apiBaseUrl.
+   * Token-introspection URL for API token verification.
+   * Uses introspectionUrl override if configured, otherwise derived from
+   * apiBaseUrl. Note: this lives directly under apiBaseUrl (NOT under /auth).
    */
-  get apiTokenJwksUrl(): string {
+  get introspectionUrl(): string {
     return (
-      this.config.apiTokenJwksUrl ??
-      `${this.authBaseUrl}/account/app/.well-known/jwks.json`
+      this.config.introspectionUrl ??
+      `${this.config.apiBaseUrl}/account/api-token/introspect`
     );
+  }
+
+  /** How long (ms) successful introspections are cached. 0 = disabled. */
+  get introspectionCacheTtlMs(): number | undefined {
+    return this.config.introspectionCacheTtlMs;
   }
 
   /**
