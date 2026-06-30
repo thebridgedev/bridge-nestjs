@@ -245,6 +245,8 @@ What you can read on the returned scope (each field lazily resolves the cached f
 | `entitlements.snapshot()` | `Promise<Record<string, boolean>>` |
 | `branding` | `Promise<{ logo, name, ...colors }>` |
 | `user` | `Promise<{ id, email?, role, tenantId }>` |
+| `usage.report(metric, value?, key?)` | `Promise<void>` — report metered usage (TBP-275) |
+| `usage.quota(metric)` | `Promise<QuotaSnapshot \| null>` — live quota incl. metered overage cost |
 | `snapshot()` | `Promise<SessionSnapshotData>` (the full payload) |
 | `invalidate()` | force-refresh the cached snapshot on next access |
 
