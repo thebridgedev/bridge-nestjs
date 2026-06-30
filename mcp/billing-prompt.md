@@ -91,6 +91,27 @@ const user = await tenant.user;        // { id, email?, role, tenantId }
 const branding = await tenant.branding; // { logo, name, primaryButtonBgColor?, ... }
 ```
 
+### Metered usage (TBP-275)
+
+When a plan has **metered** quotas (per-unit billing), the backend is where you
+**report** usage as it happens and can read the live per-metric snapshot:
+
+```ts
+// Report a usage event for the current tenant (idempotency-keyed, best-effort).
+await tenant.usage.report('api_calls');     // value defaults to 1
+await tenant.usage.report('tokens', 1375);  // report N units
+
+// Read the live quota snapshot (includes metered overage estimate).
+const q = await tenant.usage.quota('api_calls');
+// q?.policy ('hard' | 'metered'); for metered: q.unitAmount, q.currency,
+// q.overageEstimate, q.overcap. null when no quota is configured for the metric.
+```
+
+Reporting usage is a backend responsibility (it must be trusted); the per-unit
+**price** is set by the operator via `bridge plan quota set --policy metered
+--price-amount <n>`, and bridge-api meters + bills it through Stripe. Do not add
+Stripe code here.
+
 Example — surface plan and lifecycle to the client:
 
 ```ts

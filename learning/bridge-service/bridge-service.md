@@ -100,6 +100,28 @@ const canExport = tenant.entitlements.canSync('pdf-export', ents);
 const canBulk   = tenant.entitlements.canSync('bulk-import', ents);
 ```
 
+### `tenant.usage` (TBP-275 — metered usage)
+
+Report usage events and read live per-metric quota snapshots (including metered
+overage cost) server-side, without hand-rolling the REST calls.
+
+```typescript
+// Report usage (best-effort, idempotency-keyed; never throws into the request path)
+await tenant.usage.report('api_calls');        // value defaults to 1
+await tenant.usage.report('tokens', 1375);     // report N units
+
+// Read the live quota snapshot for a metric
+const q = await tenant.usage.quota('api_calls');
+if (q?.policy === 'metered' && q.overcap) {
+  log.info(`Overage: ${q.used - q.limit} units · ~${q.overageEstimate} ${q.currency}`);
+}
+```
+
+| Method | Behavior |
+|---|---|
+| `report(metric, value = 1, idempotencyKey?): Promise<void>` | POSTs `/usage/ingest`. Best-effort — resolves on completion, swallows transport errors. `idempotencyKey` auto-generates when omitted so accidental double-reports dedupe server-side. |
+| `quota(metric): Promise<QuotaSnapshot \| null>` | Live snapshot from `/usage/quota/:metric`; `null` when no quota is configured. `QuotaSnapshot` carries `used/limit/remaining/warningLevel/policy` and, for `metered` quotas, `unitAmount/currency/overageEstimate/overcap`. |
+
 ### `tenant.branding` → `Promise<BrandingSnapshot>`
 
 ```typescript

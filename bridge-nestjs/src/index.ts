@@ -27,9 +27,11 @@ export {
   BRIDGE_OPTIONS,
   type BridgeModuleOptions,
   type BrandingSnapshot,
+  type QuotaSnapshot,
   type SessionSnapshotData,
   type SubscriptionSnapshot,
   type TenantEntitlementsView,
+  type TenantUsageView,
   type UserSnapshot,
 } from './bridge';
 
