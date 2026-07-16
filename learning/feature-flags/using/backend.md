@@ -1,15 +1,15 @@
 # Receiving forwarded context
 
 Evaluating a flag in NestJS is local and instant. But when a Bridge frontend
-(Svelte, React, Angular, Next.js) also evaluates the *same* flag for the *same*
-user, both sides have to agree on identity — otherwise a percentage rollout can
-put the browser in the "on" bucket and your API in the "off" bucket for one
-request, a split-brain. The frontend knows the visitor's identity and whatever
-attributes it set; your NestJS service has no way to know either unless the
-frontend sends them.
+(Svelte, React, Angular, Next.js) also evaluates the *same* flag for the
+*same* user, both sides have to agree on identity; otherwise a percentage
+rollout can put the browser in the "on" bucket and your API in the "off"
+bucket for one request, a split-brain. The frontend knows the visitor's
+identity and whatever attributes it set; your NestJS service has no way to
+know either unless the frontend sends them.
 
-The frontend SDKs serialize their eval context into an `x-bridge-context` header
-on requests to your API. This page is about receiving it.
+The frontend SDKs serialize their eval context into an `x-bridge-context`
+header on requests to your API. This page is about receiving it.
 
 ## Wire up BridgeContextInterceptor
 
@@ -35,11 +35,11 @@ import { BridgeFlagsModule, BridgeContextInterceptor } from '@nebulr-group/bridg
 export class AppModule {}
 ```
 
-Once it's in place, the guard (`@RequireFlag`), the `@Flag` param decorator, and
-any per-request eval you do all pick up `req.bridgeFlagsContext` automatically —
-they bucket against the same identity the frontend just used. A missing or
-malformed header is a no-op: the request still works, it just falls back to the
-module's global context.
+Once it's in place, the guard (`@RequireFlag`), the `@Flag` param decorator,
+and any per-request eval you do all pick up `req.bridgeFlagsContext`
+automatically; they bucket against the same identity the frontend just used.
+A missing or malformed header is a no-op: the request still works, it just
+falls back to the module's global context.
 
 ## Evaluate with the forwarded context
 
@@ -63,15 +63,17 @@ export class CheckoutController {
 }
 ```
 
-Because the identity matches what the browser evaluated against, the browser and
-your API land in the same rollout bucket for that user.
+Because the identity matches what the browser evaluated against, the browser
+and your API land in the same rollout bucket for that user.
 
-## What to trust — and what not to
+## What to trust, and what not to
 
-Only accept forwarded identity and attributes the backend genuinely can't derive
-itself: an anonymous visitor ID, a cart size held in client state, a locale
-picked in the UI. **Never trust a forwarded `role`- or `plan`-style attribute** —
-the browser could set any value. Read those from your own verified sources (the
-user's JWT, your tenant record) by registering an `AuthAttributeProvider`, which
-resolves them under the `bridge:` namespace so client-sent attributes can't
-shadow them. See [Target by plan or role](/feature-flags/targeting/by-plan-or-role/).
+Only accept forwarded identity and attributes the backend genuinely can't
+derive itself: an anonymous visitor ID, a cart size held in client state, a
+locale picked in the UI. **Never trust a forwarded `role`- or `plan`-style
+attribute**: the browser could set any value. Read those from your own
+verified sources (the user's JWT, your own record of the workspace, which the
+API calls a *tenant*) by registering an `AuthAttributeProvider`, so plan/role
+targeting resolves from claims you verified rather than values the wire
+handed you. See
+[Target by plan or role](/feature-flags/targeting/by-plan-or-role/).
