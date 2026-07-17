@@ -4,12 +4,15 @@ import {
   ExecutionContext,
   UnauthorizedException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Request, Response } from 'express';
 import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
+import { BridgeService } from '../bridge/bridge.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { REQUIRED_ROLE_KEY } from '../decorators/require-role.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-feature-flag.decorator';
@@ -58,6 +61,28 @@ const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = 
 };
 
 /**
+ * Body of a 402 Payment Required denial (TBP-472). Dev-friendly: carries an
+ * action `reason` plus the specific plan / entitlement that was required.
+ */
+interface PaymentRequiredBody {
+  error: 'Payment required';
+  reason: 'plan_required' | 'entitlement_missing' | 'billing_locked';
+  requiredPlan?: string;
+  requiredEntitlement?: string;
+}
+
+/**
+ * 402 Payment Required — plan/entitlement gating (TBP-472). NestJS has no
+ * built-in exception for this status, so we throw a raw HttpException with a
+ * dev-friendly body.
+ */
+class PaymentRequiredException extends HttpException {
+  constructor(body: PaymentRequiredBody) {
+    super({ statusCode: HttpStatus.PAYMENT_REQUIRED, ...body }, HttpStatus.PAYMENT_REQUIRED);
+  }
+}
+
+/**
  * Guard that validates JWT bearer tokens / API tokens and enforces
  * role, feature flag, and privilege requirements.
  *
@@ -90,6 +115,7 @@ export class BridgeAuthGuard implements CanActivate {
     private readonly configService: BridgeConfigService,
     private readonly jwksService: JwksService,
     private readonly featureFlagService: FeatureFlagService,
+    private readonly bridgeService: BridgeService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -378,9 +404,135 @@ export class BridgeAuthGuard implements CanActivate {
         }
         this.configService.log('Feature flag check passed', { flag: requiredFlag });
       }
+
+      // Route-rule gating (TBP-472): feature flag (403), then plan and
+      // entitlement (402). Only user JWTs carry the tenant/subscription
+      // context these checks need, so they run in the user branch and require
+      // the access token to resolve the snapshot / evaluate flags.
+      if (matchingRule && token) {
+        await this.enforceRouteRuleGating(matchingRule, token);
+      }
     }
 
     return true;
+  }
+
+  /**
+   * Enforce the TBP-472 route-rule conditions for a user JWT:
+   *   - `featureFlag` → 403 Forbidden when disabled (reuses FeatureFlagService,
+   *     the same eval path as `@RequireFeatureFlag`).
+   *   - `plans` → 402 Payment Required (`plan_required`) when the tenant's
+   *     subscription plan slug is not in the allow-list.
+   *   - `entitlement` → 402 Payment Required (`entitlement_missing`) when any
+   *     required entitlement key is not granted.
+   *
+   * Fail-closed: any error resolving the subscription/entitlements/flag denies
+   * the request (402 `billing_locked` for plan/entitlement resolution errors,
+   * 403 for flag-evaluation errors).
+   */
+  private async enforceRouteRuleGating(rule: RouteRule, token: string): Promise<void> {
+    // 1. Feature flag (403). Reuses the decorator eval path.
+    if (rule.featureFlag) {
+      let flagEnabled: boolean;
+      try {
+        flagEnabled = await this.featureFlagService.evaluateRequirement(rule.featureFlag, token);
+      } catch (error) {
+        // Fail-closed: undeterminable flag → deny.
+        this.configService.log('Route feature flag evaluation error — denying (fail-closed)', {
+          error,
+        });
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'Forbidden',
+          message: 'Feature flag could not be evaluated',
+        });
+      }
+      if (!flagEnabled) {
+        const flagName =
+          typeof rule.featureFlag === 'string'
+            ? rule.featureFlag
+            : JSON.stringify(rule.featureFlag);
+        this.configService.log('Route feature flag check failed', { flag: flagName });
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'Forbidden',
+          message: `Feature flag '${flagName}' is not enabled`,
+        });
+      }
+      this.configService.log('Route feature flag check passed');
+    }
+
+    const needsPlan = Array.isArray(rule.plans) && rule.plans.length > 0;
+    const requiredEntitlements = this.normalizeEntitlements(rule.entitlement);
+    const needsEntitlement = requiredEntitlements.length > 0;
+
+    if (!needsPlan && !needsEntitlement) {
+      return;
+    }
+
+    // 2 & 3. Plan + entitlement both read the tenant snapshot (one round-trip,
+    // shared via BridgePullCache). Fail-closed: snapshot resolution error → 402.
+    const tenant = this.bridgeService.fromJwt(token);
+
+    if (needsPlan) {
+      let planSlug: string;
+      try {
+        const subscription = await tenant.subscription;
+        planSlug = subscription?.plan?.slug ?? '';
+      } catch (error) {
+        this.configService.log('Subscription resolution error — denying (fail-closed)', { error });
+        throw new PaymentRequiredException({
+          error: 'Payment required',
+          reason: 'billing_locked',
+        });
+      }
+      if (!planSlug || !rule.plans!.includes(planSlug)) {
+        this.configService.log('Route plan check failed', {
+          required: rule.plans,
+          actual: planSlug,
+        });
+        throw new PaymentRequiredException({
+          error: 'Payment required',
+          reason: 'plan_required',
+          requiredPlan: rule.plans!.join(', '),
+        });
+      }
+      this.configService.log('Route plan check passed', { plan: planSlug });
+    }
+
+    if (needsEntitlement) {
+      for (const key of requiredEntitlements) {
+        let granted: boolean;
+        try {
+          granted = await tenant.entitlements.can(key);
+        } catch (error) {
+          this.configService.log('Entitlement resolution error — denying (fail-closed)', {
+            error,
+            key,
+          });
+          throw new PaymentRequiredException({
+            error: 'Payment required',
+            reason: 'billing_locked',
+            requiredEntitlement: key,
+          });
+        }
+        if (!granted) {
+          this.configService.log('Route entitlement check failed', { required: key });
+          throw new PaymentRequiredException({
+            error: 'Payment required',
+            reason: 'entitlement_missing',
+            requiredEntitlement: key,
+          });
+        }
+      }
+      this.configService.log('Route entitlement check passed', { entitlements: requiredEntitlements });
+    }
+  }
+
+  /** Normalize `entitlement?: string | string[]` to a string[] (all required). */
+  private normalizeEntitlements(entitlement: string | string[] | undefined): string[] {
+    if (!entitlement) return [];
+    return Array.isArray(entitlement) ? entitlement.filter(Boolean) : [entitlement];
   }
 
   /**

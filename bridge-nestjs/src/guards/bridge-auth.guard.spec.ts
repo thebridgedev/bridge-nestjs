@@ -81,6 +81,11 @@ describe('BridgeAuthGuard', () => {
   let configService: jest.Mocked<BridgeConfigService>;
   let jwksService: jest.Mocked<JwksService>;
   let featureFlagService: jest.Mocked<FeatureFlagService>;
+  let bridgeService: { fromJwt: jest.Mock };
+  let tenantScope: {
+    subscription: Promise<any>;
+    entitlements: { can: jest.Mock };
+  };
 
   beforeEach(() => {
     reflector = {
@@ -103,7 +108,23 @@ describe('BridgeAuthGuard', () => {
       evaluateRequirement: jest.fn(),
     } as any;
 
-    guard = new BridgeAuthGuard(reflector, configService, jwksService, featureFlagService);
+    // TBP-472 — default TenantScope: no entitlements, no plan. Individual
+    // tests override `tenantScope.subscription` / `tenantScope.entitlements.can`.
+    tenantScope = {
+      subscription: Promise.resolve({ plan: { slug: 'free', name: 'Free' }, status: 'active' }),
+      entitlements: { can: jest.fn().mockResolvedValue(false) },
+    };
+    bridgeService = {
+      fromJwt: jest.fn(() => tenantScope),
+    };
+
+    guard = new BridgeAuthGuard(
+      reflector,
+      configService,
+      jwksService,
+      featureFlagService,
+      bridgeService as any,
+    );
   });
 
   describe('public routes', () => {
@@ -290,6 +311,196 @@ describe('BridgeAuthGuard', () => {
 
       const ctx = makeContext({ path: '/beta/feature', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('route-rule plan gating (TBP-472, 402)', () => {
+    it('passes when tenant plan is in the rule allow-list', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/reports/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['pro', 'enterprise'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.subscription = Promise.resolve({ plan: { slug: 'pro', name: 'Pro' } });
+
+      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(bridgeService.fromJwt).toHaveBeenCalledWith('token');
+    });
+
+    it('denies with 402 plan_required when tenant plan is not allowed', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/reports/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['pro', 'enterprise'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.subscription = Promise.resolve({ plan: { slug: 'free', name: 'Free' } });
+
+      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        status: 402,
+        response: {
+          statusCode: 402,
+          error: 'Payment required',
+          reason: 'plan_required',
+          requiredPlan: 'pro, enterprise',
+        },
+      });
+    });
+
+    it('fail-closed: subscription resolution error → 402 billing_locked', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/reports/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['pro'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.subscription = Promise.reject(new Error('session/init 500'));
+
+      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        status: 402,
+        response: { reason: 'billing_locked' },
+      });
+    });
+  });
+
+  describe('route-rule entitlement gating (TBP-472, 402)', () => {
+    it('passes when tenant has the required entitlement', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/export',
+        privilege: 'AUTHENTICATED',
+        entitlement: 'export',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.entitlements.can.mockResolvedValue(true);
+
+      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(tenantScope.entitlements.can).toHaveBeenCalledWith('export');
+    });
+
+    it('denies with 402 entitlement_missing when entitlement absent', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/export',
+        privilege: 'AUTHENTICATED',
+        entitlement: 'export',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.entitlements.can.mockResolvedValue(false);
+
+      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        status: 402,
+        response: {
+          statusCode: 402,
+          error: 'Payment required',
+          reason: 'entitlement_missing',
+          requiredEntitlement: 'export',
+        },
+      });
+    });
+
+    it('requires ALL entitlements when given an array (denies if one missing)', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/export',
+        privilege: 'AUTHENTICATED',
+        entitlement: ['export', 'bulk'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.entitlements.can.mockImplementation((k: string) => Promise.resolve(k === 'export'));
+
+      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        status: 402,
+        response: { reason: 'entitlement_missing', requiredEntitlement: 'bulk' },
+      });
+    });
+
+    it('fail-closed: entitlement resolution error → 402 billing_locked', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/export',
+        privilege: 'AUTHENTICATED',
+        entitlement: 'export',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.entitlements.can.mockRejectedValue(new Error('snapshot failed'));
+
+      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        status: 402,
+        response: { reason: 'billing_locked', requiredEntitlement: 'export' },
+      });
+    });
+  });
+
+  describe('route-rule feature-flag gating (TBP-472, 403)', () => {
+    it('passes when the rule feature flag is enabled', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/beta',
+        privilege: 'AUTHENTICATED',
+        featureFlag: 'beta-access',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      featureFlagService.evaluateRequirement.mockResolvedValue(true);
+
+      const ctx = makeContext({ path: '/beta', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(featureFlagService.evaluateRequirement).toHaveBeenCalledWith('beta-access', 'token');
+    });
+
+    it('denies with 403 when the rule feature flag is disabled', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/beta',
+        privilege: 'AUTHENTICATED',
+        featureFlag: 'beta-access',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      featureFlagService.evaluateRequirement.mockResolvedValue(false);
+
+      const ctx = makeContext({ path: '/beta', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+
+    it('fail-closed: flag evaluation error → 403', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/beta',
+        privilege: 'AUTHENTICATED',
+        featureFlag: 'beta-access',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      featureFlagService.evaluateRequirement.mockRejectedValue(new Error('flag api down'));
+
+      const ctx = makeContext({ path: '/beta', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('route-rule gating backward compatibility (TBP-472)', () => {
+    it('rules without plans/entitlement/featureFlag behave exactly as today (no snapshot fetch)', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/items',
+        privilege: 'AUTHENTICATED',
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+
+      const ctx = makeContext({ path: '/items', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(bridgeService.fromJwt).not.toHaveBeenCalled();
+      expect(featureFlagService.evaluateRequirement).not.toHaveBeenCalled();
     });
   });
 

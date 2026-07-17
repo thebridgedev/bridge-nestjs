@@ -33,8 +33,26 @@ export interface RouteRule {
   graphqlOperation?: string;
   /** Required privilege level for this route */
   privilege: RoutePrivilege;
-  /** Optional plan restriction — tenant plan must be in this list */
+  /**
+   * Optional plan restriction (TBP-472). The tenant's subscription plan slug
+   * must be in this list, otherwise the request is denied with 402 Payment
+   * Required (`reason: 'plan_required'`). Fail-closed: if the plan cannot be
+   * resolved the request is denied.
+   */
   plans?: string[];
+  /**
+   * Optional entitlement restriction (TBP-472). Each key is checked via
+   * `bridge.fromJwt(jwt).entitlements.can(key)`; the tenant must have ALL
+   * listed entitlements, otherwise 402 Payment Required
+   * (`reason: 'entitlement_missing'`). Fail-closed on resolution error.
+   */
+  entitlement?: string | string[];
+  /**
+   * Optional feature-flag restriction (TBP-472). Evaluated for the request's
+   * user JWT via the same path as `@RequireFeatureFlag`; a disabled flag
+   * denies with 403 Forbidden. Fail-closed on resolution error.
+   */
+  featureFlag?: FeatureFlagRequirement;
 }
 
 /**
