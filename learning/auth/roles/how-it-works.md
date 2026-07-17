@@ -7,14 +7,14 @@ sidebar:
 
 # How roles & privileges work
 
-A **role** is a named set of **privileges** — scoped permission keys like `USER_READ` or `TENANT_WRITE`. Every user is assigned exactly one role per tenant; the role determines what that user can do in that workspace.
+A **role** is a named set of **privileges**: scoped permission keys like `USER_READ` or `TENANT_WRITE`. Every user is assigned exactly one role per workspace (called a *tenant* in the API); the role determines what that user can do in that workspace.
 
-Roles are fully custom to your app — you're not stuck with a fixed enum. Every app starts with:
+Roles are fully custom to your app; you're not stuck with a fixed enum. Every app starts with:
 
-- **`OWNER`** — required, protected, granted automatically. See [The owner role](/auth/roles/owner-role/).
-- **`ADMIN`** — created by default but just a normal role; rename it, change its privileges, or delete it.
+- **`OWNER`**: required, protected, granted automatically. See [The owner role](/auth/roles/owner-role/).
+- **`ADMIN`**: created by default but just a normal role; rename it, change its privileges, or delete it.
 
-From there you can define as many roles as you need — see [Common role setups](/auth/roles/common-setups/) for a worked example.
+From there you can define as many roles as you need. See [Common role setups](/auth/roles/common-setups/) for a worked example, including a bespoke role for a specific client.
 
 ## Where role and privileges live
 
@@ -39,7 +39,7 @@ export class UsersController {
 }
 ```
 
-There is no server-side lookup involved — the guard never queries a roles database. Whatever role/privileges are embedded in the token *are* the role/privileges for that request. See [How the token is kept current](/auth/user-token/object-updates/) for what that implies when a role changes mid-session.
+There is no server-side lookup involved; the guard never queries a roles database. Whatever role/privileges are embedded in the token *are* the role/privileges for that request. See [How the token is kept current](/auth/user-token/object-updates/) for what that implies when a role changes mid-session.
 
 ## Two separate enforcement mechanisms
 
@@ -47,9 +47,9 @@ This is the part that trips people up: **role checks and privilege checks are en
 
 | Decorator | Applies to | Bypassed by |
 |---|---|---|
-| `@RequireRole(role)` | User JWT only — checks `user.role` | API tokens don't carry a `role`, so this decorator has no effect on API-token-only requests |
-| `@RequirePrivilege(privilege)` | API token only — checks `req.bridgeApiToken.privileges` | User JWTs bypass this check entirely (backward-compatibility: existing endpoints that added `@RequirePrivilege()` for API-token enforcement don't break user-JWT access) |
-| Route-rule `privilege` (e.g. `{ path: '/users/*', privilege: 'USER_READ' }`) | User JWT only — checks `user.privileges` | Only evaluated when a user JWT is present on the request |
+| `@RequireRole(role)` | User JWT only; checks `user.role` | API tokens don't carry a `role`, so this decorator has no effect on API-token-only requests |
+| `@RequirePrivilege(privilege)` | API token only; checks `req.bridgeApiToken.privileges` | User JWTs bypass this check entirely (backward-compatibility: existing endpoints that added `@RequirePrivilege()` for API-token enforcement don't break user-JWT access) |
+| Route-rule `privilege` (e.g. `{ path: '/users/*', privilege: 'USER_READ' }`) | User JWT only; checks `user.privileges` | Only evaluated when a user JWT is present on the request |
 
 In practice: use `@RequireRole()` (or route-rule `privilege`) to gate what a **signed-in person** can do, and `@RequirePrivilege()` to gate what a **token** (script, integration, CI job) can do. See [API tokens](/auth/api-tokens/) for the full API-token auth flow.
 
@@ -67,13 +67,13 @@ export class AdminController {
   }
 
   @Get('settings')
-  @RequireRole('OWNER') // route-level override — requires OWNER instead of ADMIN
+  @RequireRole('OWNER') // route-level override: requires OWNER instead of ADMIN
   getSettings(@CurrentUser() user: BridgeUser) {
     return { settings: 'sensitive data' };
   }
 }
 ```
 
-Route-level decorators override controller-level ones — the guard uses Nest's `Reflector.getAllAndOverride`, so the most specific decorator wins. A `403 Forbidden` with `"Role '<role>' required"` is thrown when the check fails.
+Route-level decorators override controller-level ones; the guard uses Nest's `Reflector.getAllAndOverride`, so the most specific decorator wins. A `403 Forbidden` with `"Role '<role>' required"` is thrown when the check fails.
 
-For anything security-critical, enforce it here — in a guard or decorator on the actual endpoint — never rely on a role check that only exists in a caller's UI.
+For anything that must be enforced (not just hidden in a caller's UI), enforce it here, in a guard or decorator on the actual endpoint; never rely on a role check that only exists on the frontend.

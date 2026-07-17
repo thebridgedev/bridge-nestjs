@@ -54,7 +54,6 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
           { path: '/users/*', privilege: 'USER_READ' },
 
           // Restrict by subscription plan
-          { path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] },
         ],
       },
     }),
@@ -146,7 +145,7 @@ export class ApiUsersController {
     // ...
   }
 
-  // Only accept API tokens — user JWTs get 401
+  // Only accept API tokens; user JWTs get 401
   @Get('external')
   @AcceptAuth('api_token')
   @RequirePrivilege('USER_READ')

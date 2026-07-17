@@ -7,13 +7,13 @@ sidebar:
 
 # The owner role
 
-Every tenant has an `OWNER` role, and Bridge enforces some rules around it that you'll want to know before you hit them:
+Every workspace (called a *tenant* in the API) has an `OWNER` role, and Bridge enforces some rules around it that you'll want to know before you hit them:
 
-- **Every tenant must have at least one owner.** Whoever creates a tenant becomes its first `OWNER` automatically.
-- **You can't demote the last owner.** Changing a user's role away from `OWNER` is blocked if they're the only owner left in the tenant — the API rejects it with "There must be at least one owner for this workspace." Promote someone else to `OWNER` first, then demote the original one.
+- **Every workspace must have at least one owner.** Whoever creates a workspace becomes its first `OWNER` automatically.
+- **You can't demote the last owner.** Changing a user's role away from `OWNER` is blocked if they're the only owner left in the workspace; the API rejects it with "There must be at least one owner for this workspace." Promote someone else to `OWNER` first, then demote the original one.
 - **The `OWNER` role itself can't be deleted, and its key can't be changed to something else.** You can still edit its name, description, or (carefully) its privilege set.
 
-`OWNER` is granted the broadest default privilege set (`AUTHENTICATED`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`) — treat it as the role for whoever is ultimately accountable for the workspace, not a role you hand out casually.
+`OWNER` is granted the broadest default privilege set (`AUTHENTICATED`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`). Treat it as the role for whoever is ultimately accountable for the workspace, not a role you hand out casually.
 
 ## What this means for your backend
 
@@ -35,13 +35,13 @@ export class TeamAdminController {
         { role: body.role, tenantId: body.tenantId },
       );
     } catch (err) {
-      // BridgeHttpError carries the upstream status + URL — inspect the
+      // BridgeHttpError carries the upstream status + URL. Inspect the
       // response body (fetch it yourself, or extend BridgeHttpService's
       // request wrapper) to detect the "at least one owner" rejection and
       // turn it into a clean 4xx for your own API consumers instead of a 500.
       if (err instanceof BridgeHttpError) {
         throw new HttpException(
-          'Could not update this user\'s role — they may be the only owner of the workspace. Promote someone else first.',
+          'Could not update this user\'s role. They may be the only owner of the workspace; promote someone else first.',
           HttpStatus.BAD_REQUEST,
         );
       }
@@ -51,4 +51,4 @@ export class TeamAdminController {
 }
 ```
 
-If a user's role is `OWNER`, plan your own authorization logic (not just Bridge's) to expect that they always retain access — don't build a code path in your app that could lock every owner out of their own workspace.
+If a user's role is `OWNER`, plan your own authorization logic (not just Bridge's) to expect that they always retain access; don't build a code path in your app that could lock every owner out of their own workspace.

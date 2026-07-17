@@ -7,15 +7,22 @@ sidebar:
 
 # API tokens
 
-Bridge lets end users of your app self-service-create API tokens for programmatic access — a CI pipeline, a personal script, a third-party integration — without you building token issuance, storage, or revocation yourself. Creating and managing tokens is self-service UI territory (a drop-in component on the frontend); **bridge-nestjs's job is the other end** — verifying a token when it shows up on a request and exposing its claims to your guards.
+Bridge lets you offer your own users a self-service way to create API tokens for programmatic access to your API: the same idea as a GitHub or Stripe personal access token, without you having to build token issuance, storage, or revocation yourself. Creating and managing tokens is self-service UI territory (a drop-in component on the frontend); **bridge-nestjs's job is the other end**: verifying a token when it shows up on a request and exposing its claims to your guards.
+
+## How it works
+
+- **Privilege-scoped**: a token is created with an explicit set of privileges (the same privilege keys your [roles](/auth/roles/how-it-works/) use), picked from a searchable list. It can never do more than what it's granted.
+- **Workspace-scoped**: a token is bound to the workspace it was created in (a workspace is called a *tenant* in the API) and can't be replayed against another one.
+- **Hash-at-rest, shown once**: Bridge stores only a salted hash. The full token value is shown exactly once, right after creation; copy it straight into your secret manager, because Bridge can never display it again. If it's lost, revoke it and issue a new one.
+- **Revocation**: backend SDKs verify API tokens by asking Bridge (introspection) rather than checking a local signature, and by default they do this on every request, so a revoked token is rejected on its very next call. If your backend enables introspection-result caching, rejection can lag by up to that cache's TTL.
 
 ## How a token reaches your app
 
-Tokens are sent as `x-api-key`, evaluated as an independent path from the `Authorization: Bearer` (user JWT) path — see [Route guards](/auth/securing/route-guards/) for where this sits in the overall guard flow. Two ways `BridgeAuthGuard` ends up with a verified token on `request.bridgeApiToken`:
+Tokens are sent as `x-api-key`, evaluated as an independent path from the `Authorization: Bearer` (user JWT) path; see [Route guards](/auth/securing/route-guards/) for where this sits in the overall guard flow. Two ways `BridgeAuthGuard` ends up with a verified token on `request.bridgeApiToken`:
 
-1. **Pre-processed** — if something upstream (Bridge's own `bridge-api` gateway, in front of first-party services) already verified the key and set `request.bridgeApiToken`, the guard trusts it as-is and does not re-verify.
-2. **Standalone verification** — otherwise, if the `x-api-key` value is JWT-shaped (three non-empty, dot-separated segments), the guard verifies it itself via a JWKS client that's cached independently from the user-JWT one (see [Logging in and logging out](/auth/user-token/logging-in-and-out/) for the shared JWKS-caching model). This is the path a customer NestJS app not sitting behind `bridge-api` uses.
-3. **Anything else falls through silently** — a non-JWT-shaped `x-api-key` (an opaque, legacy-style key) produces no `bridgeApiToken` context at all. The guard doesn't error on it; it just behaves as if that header weren't there, and the request has to succeed some other way (a valid `Authorization: Bearer`) or it's rejected for having no credential at all.
+1. **Pre-processed**: if something upstream (Bridge's own `bridge-api` gateway, in front of first-party services) already verified the key and set `request.bridgeApiToken`, the guard trusts it as-is and does not re-verify.
+2. **Introspection**: otherwise, if the `x-api-key` value is JWT-shaped (three non-empty, dot-separated segments), the guard verifies it by POSTing it to Bridge's introspection endpoint. API tokens are signed with a per-app secret your app never holds, so they can't be verified locally the way user JWTs are (see [Logging in and logging out](/auth/user-token/logging-in-and-out/) for the user-JWT model); instead, Bridge itself checks the signature and the backing record and answers with the token's claims. This is the path a customer NestJS app not sitting behind `bridge-api` uses.
+3. **Anything else falls through silently**: a non-JWT-shaped `x-api-key` (an opaque, legacy-style key) produces no `bridgeApiToken` context at all. The guard doesn't error on it; it just behaves as if that header weren't there, and the request has to succeed some other way (a valid `Authorization: Bearer`) or it's rejected for having no credential at all.
 
 ## What's on a verified token
 
@@ -29,10 +36,10 @@ interface ApiTokenClaims {
 }
 ```
 
-- **`privileges`** — the exact set the token was created with; it can never do more than this list allows. This is the same privilege-key vocabulary your [roles](/auth/roles/how-it-works/) use (`USER_READ`, `TENANT_WRITE`, or a custom key).
-- **`tenantId`** — `null` for an app-level token not tied to a specific workspace; a real ID for a workspace-scoped token. See [Multi-tenancy](/auth/multi-tenancy/multi-tenancy/) for what that means for your endpoints.
-- **`type: 'api'`** — verified explicitly; a token missing this or carrying the wrong value fails with `TOKEN_INVALID` even if its signature checks out (guards against a user-JWT-shaped token being replayed on the API-token path).
-- **`appId`** must match your app's configured `appId` exactly, or verification fails with `APP_MISMATCH` — a token minted for a different Bridge app is rejected outright, even with a valid signature.
+- **`privileges`**: the exact set the token was created with; it can never do more than this list allows. This is the same privilege-key vocabulary your [roles](/auth/roles/how-it-works/) use (`USER_READ`, `TENANT_WRITE`, or a custom key).
+- **`tenantId`**: `null` for an app-level token not tied to a specific workspace; a real ID for a workspace-scoped token. See [Multi-tenancy](/auth/multi-tenancy/multi-tenancy/) for what that means for your endpoints.
+- **`type: 'api'`**: verified explicitly; a token missing this or carrying the wrong value fails with `TOKEN_INVALID` even if it's otherwise active (guards against a user-JWT-shaped token being replayed on the API-token path).
+- **`appId`** must match your app's configured `appId` exactly, or verification fails with `APP_MISMATCH`: a token minted for a different Bridge app is rejected outright, even when Bridge reports it active.
 
 Read it directly when `@RequirePrivilege()` isn't enough on its own:
 
@@ -52,7 +59,7 @@ export class ReportsController {
 
 ## Privilege enforcement is API-token-only
 
-`@RequirePrivilege(privilege)` checks **only** `req.bridgeApiToken.privileges` — it has no effect on a user-JWT-only request; user JWTs bypass it entirely (existing backward-compatibility behavior). This is the single most important thing to get right about this decorator, and it's the flip side of `@RequireRole()`, which checks only the user JWT's role and is a no-op for API-token-only requests. See [How roles & privileges work](/auth/roles/how-it-works/) for the full comparison table.
+`@RequirePrivilege(privilege)` checks **only** `req.bridgeApiToken.privileges`. It has no effect on a user-JWT-only request; user JWTs bypass it entirely (existing backward-compatibility behavior). This is the single most important thing to get right about this decorator, and it's the flip side of `@RequireRole()`, which checks only the user JWT's role and is a no-op for API-token-only requests. See [How roles & privileges work](/auth/roles/how-it-works/) for the full comparison table.
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
@@ -67,7 +74,7 @@ export class UsersController {
 }
 ```
 
-An empty `privileges: []` array on a token still passes the guard's *authentication* step (it's a validly-signed, correctly-typed, correctly-scoped token) — it's `@RequirePrivilege()` specifically that then rejects it with a `403`.
+An empty `privileges: []` array on a token still passes the guard's *authentication* step (it's an active, correctly-typed, correctly-scoped token); it's `@RequirePrivilege()` specifically that then rejects it with a `403`.
 
 ## Restricting which credential type an endpoint accepts
 
@@ -83,11 +90,11 @@ import { BridgeAuthGuard, AcceptAuth } from '@nebulr-group/bridge-nestjs';
 export class ApiTokenUserController { /* … */ }
 ```
 
-When a caller sends **both** headers at once (first-party Bridge frontends like cloud-views always do), both are verified independently and both contexts end up on the request (`bridgeApiToken` *and* `bridgeUser`/`bridgeTenant`/`bridgeAccessToken` all coexisting) — `@AcceptAuth('jwt')` only rejects a request when the API token is the *only* credential offered, not when it's present alongside a valid JWT.
+When a caller sends **both** headers at once (first-party Bridge frontends like cloud-views always do), both are verified independently and both contexts end up on the request (`bridgeApiToken` *and* `bridgeUser`/`bridgeTenant`/`bridgeAccessToken` all coexisting). `@AcceptAuth('jwt')` only rejects a request when the API token is the *only* credential offered, not when it's present alongside a valid JWT.
 
-## A note on revocation
+## Revocation and caching
 
-Bridge's self-service token UI describes revocation as immediate — a caller presenting a revoked token gets a `401` on its next request. That guarantee is enforced by whichever system is checking the token against Bridge's own token store. Reading `JwksService.verifyApiToken()` directly: **standalone verification only checks the signature, the `type: 'api'` claim, and the `appId` match** — it does not call back to Bridge per request to ask whether this specific token has since been revoked. If your app verifies API tokens standalone (no `bridge-api` middleware in front already populating `request.bridgeApiToken` for you), factor that into your threat model for a compromised token's blast radius, the same caveat that applies to user JWTs (see [Logging in and logging out](/auth/user-token/logging-in-and-out/)).
+Because verification is introspection (Bridge re-checks the backing token record on every uncached call), revocation is effectively immediate by default: a caller presenting a revoked token gets a `401` on its next request. The one knob that trades this away is `introspectionCacheTtlMs` (see [Configuration](/auth/config/)): when set above `0`, a successful introspection result is cached per token for that long, so a just-revoked token can keep working for up to the TTL. The default is `0` (no caching, instant revocation). One caveat that stays regardless: if your app sits behind `bridge-api` middleware that pre-populates `request.bridgeApiToken`, revocation latency is whatever that upstream verifier provides, since the guard trusts the pre-processed claims as-is.
 
 ## Worked example
 
@@ -115,4 +122,5 @@ class ApiTokenTestController {
 - `x-api-key: <token with USER_READ>` → `GET /api-token-test/privileged` → `200`
 - `x-api-key: <token without USER_READ>` → `403`
 - `x-api-key: <token with an appId for a different app>` → `401`
+- `x-api-key: <revoked token>` → `401` (introspection reports it inactive)
 - `Authorization: Bearer <user JWT, no privileges claim at all>` → `GET /api-token-test/privileged` → `200` (user JWTs bypass `@RequirePrivilege`)

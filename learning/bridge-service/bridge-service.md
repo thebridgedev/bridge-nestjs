@@ -1,20 +1,20 @@
 # Reading tenant data with `BridgeService`
 
 `BridgeService` gives a request handler one place to read everything Bridge knows about the **current
-request's tenant**: its subscription, entitlements, branding, and user — without hand-rolling REST calls
+request's tenant**: its subscription, entitlements, branding, and user, without hand-rolling REST calls
 to the Bridge API.
 
 Two things to know:
 
 1. **It reads on demand and caches.** Each tenant's data is fetched over REST and cached briefly. There
-   are no push updates on the server — to react to a change (e.g. a plan upgrade), use Bridge **webhooks**.
+   are no push updates on the server; to react to a change (e.g. a plan upgrade), use Bridge **webhooks**.
 2. **It's per request.** Every request carries a different tenant. You pass the incoming user's JWT and
    get back a scope bound to *that* user's tenant.
 
 ## Setup
 
 `BridgeService` is provided and exported automatically by `BridgeModule.forRoot()` /
-`forRootAsync()` — no extra wiring. Just inject it.
+`forRootAsync()`, so there is no extra wiring. Just inject it.
 
 ```typescript
 import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
@@ -43,7 +43,7 @@ export class ReportsController {
 forwarded to the Bridge API on the data fetch; the API derives the tenant from the token and returns the
 matching data. Requests for the same user are deduped onto a single round-trip.
 
-> `bridge.tenant(tenantId)` — for accessing an arbitrary tenant from cron/admin code — is **not yet
+> `bridge.tenant(tenantId)` (for accessing an arbitrary tenant from cron/admin code) is **not yet
 > available** and throws a clear error if called. Use `bridge.fromJwt(userJwt)` from a request handler.
 
 ## What you can read
@@ -91,7 +91,7 @@ if (await tenant.entitlements.can('seats:10')) { /* ... */ }
 |---|---|
 | `can(key): Promise<boolean>` | Loads the data if needed, then answers. The usual call. |
 | `snapshot(): Promise<Record<string, boolean>>` | The full entitlements map; fetches on first call. |
-| `canSync(key, cached): boolean` | Synchronous check against an already-loaded map — pass the result of a prior `snapshot()`. Use when checking many keys in a hot path. |
+| `canSync(key, cached): boolean` | Synchronous check against an already-loaded map: pass the result of a prior `snapshot()`. Use when checking many keys in a hot path. |
 
 ```typescript
 // Many checks without re-awaiting each time:
@@ -100,7 +100,7 @@ const canExport = tenant.entitlements.canSync('pdf-export', ents);
 const canBulk   = tenant.entitlements.canSync('bulk-import', ents);
 ```
 
-### `tenant.usage` (TBP-275 — metered usage)
+### `tenant.usage` (TBP-275, metered usage)
 
 Report usage events and read live per-metric quota snapshots (including metered
 overage cost) server-side, without hand-rolling the REST calls.
@@ -119,7 +119,7 @@ if (q?.policy === 'metered' && q.overcap) {
 
 | Method | Behavior |
 |---|---|
-| `report(metric, value = 1, idempotencyKey?): Promise<void>` | POSTs `/usage/ingest`. Best-effort — resolves on completion, swallows transport errors. `idempotencyKey` auto-generates when omitted so accidental double-reports dedupe server-side. |
+| `report(metric, value = 1, idempotencyKey?): Promise<void>` | POSTs `/usage/ingest`. Best-effort: resolves on completion, swallows transport errors. `idempotencyKey` auto-generates when omitted so accidental double-reports dedupe server-side. |
 | `quota(metric): Promise<QuotaSnapshot \| null>` | Live snapshot from `/usage/quota/:metric`; `null` when no quota is configured. `QuotaSnapshot` carries `used/limit/remaining/warningLevel/policy` and, for `metered` quotas, `unitAmount/currency/overageEstimate/overcap`. |
 
 ### `tenant.branding` → `Promise<BrandingSnapshot>`
@@ -150,7 +150,7 @@ interface UserSnapshot {
 
 ### `tenant.invalidate()`
 
-Force the next access to re-fetch — call this right after a change that affects the data (e.g. you just
+Force the next access to re-fetch. Call this right after a change that affects the data (e.g. you just
 upgraded the plan and want the fresh subscription):
 
 ```typescript
@@ -161,25 +161,11 @@ const fresh = await tenant.subscription; // re-fetched
 
 ## Gating features by subscription
 
-Reading the subscription and checking entitlements is how you enforce paid features server-side — there
+Reading the subscription and checking entitlements is how you enforce paid features server-side; there
 is no checkout or paywall in a backend plugin. Purchase and upgrade flows live in your frontend and in
 the Bridge API (webhooks drive the subscription lifecycle). Two ways to enforce:
 
-**Declarative** — gate a route by plan in the central rules (see [Configuration](../configuration/configuration.md)):
-
-```typescript
-BridgeModule.forRoot({
-  appId,
-  guard: {
-    global: true,
-    rules: [
-      { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
-    ],
-  },
-});
-```
-
-**Programmatic** — gate inside a handler with an entitlement check:
+Gate inside a handler with an entitlement check:
 
 ```typescript
 if (!(await this.bridge.fromJwt(jwt).entitlements.can('feature-key'))) {
@@ -190,12 +176,12 @@ if (!(await this.bridge.fromJwt(jwt).entitlements.can('feature-key'))) {
 ## Caching notes
 
 - Default cache lifetime is **30s**. The same cache is injectable directly via `BRIDGE_PULL_CACHE` for
-  other REST data you want to dedupe — see the README's "Read modes — channel vs pull" section.
+  other REST data you want to dedupe (see the README's "Read modes: channel vs pull" section).
 - To react to a billing change (a plan upgrade, a cancellation), use Bridge **webhooks** rather than
   polling.
 
 ## See also
 
-- [Configuration](../configuration/configuration.md) — `plans` route rules
-- [Feature Flags](../feature-flags/feature-flags.md) — flag-based gating (distinct from entitlements)
-- [Multi-Tenancy](../multi-tenancy/multi-tenancy.md) — tenant context fundamentals
+- [Configuration](../configuration/configuration.md): route rules and guard setup
+- [Feature flags](../feature-flags/feature-flags.md): flag-based gating (distinct from entitlements)
+- [Multi-tenancy](../multi-tenancy/multi-tenancy.md): tenant context fundamentals

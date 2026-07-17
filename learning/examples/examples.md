@@ -6,7 +6,7 @@ current API. For conceptual depth, follow the links to the topic guides.
 - [Authentication & Access Control](../auth/auth.md)
 - [Configuration](../configuration/configuration.md)
 - [Feature Flags](../feature-flags/feature-flags.md)
-- [Tenant Data — `BridgeService`](../bridge-service/bridge-service.md)
+- [Tenant data via `BridgeService`](../bridge-service/bridge-service.md)
 - [Multi-Tenancy](../multi-tenancy/multi-tenancy.md)
 - [Frontend Integration](../frontend-integration/frontend-integration.md)
 - [Error Handling](../error-handling/error-handling.md)
@@ -30,7 +30,6 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
           { path: '/health', privilege: 'ANONYMOUS' },
           { path: '/webhooks/*', privilege: 'ANONYMOUS' },
           { path: '/account/users', privilege: 'USER_READ' },
-          { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
         ],
       },
     }),
@@ -132,7 +131,7 @@ export class HealthController {
 
 ## 6. Feature flags
 
-### Live-updating — `@RequireFlag` / `@Flag`
+### Live-updating: `@RequireFlag` / `@Flag`
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
@@ -147,13 +146,13 @@ export class BetaController {
 
   @Get('home')
   home(@Flag({ key: 'show_new_home', defaultValue: false }) showNew: boolean) {
-    // NOTE: @Flag takes ONE object argument { key, defaultValue } — not positional args.
+    // NOTE: @Flag takes ONE object argument { key, defaultValue }, not positional args.
     return showNew ? this.newHome() : this.oldHome();
   }
 }
 ```
 
-### On-demand — `@RequireFeatureFlag` + `FeatureFlagService`
+### On-demand: `@RequireFeatureFlag` + `FeatureFlagService`
 
 ```typescript
 import { Controller, Get, Injectable } from '@nestjs/common';
@@ -178,7 +177,7 @@ export class ReportsService {
 }
 ```
 
-## 7. Tenant data — subscription & entitlement gating
+## 7. Tenant data: subscription and entitlement gating
 
 ```typescript
 import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
@@ -202,7 +201,7 @@ export class ReportsController {
 }
 ```
 
-See [Tenant Data — `BridgeService`](../bridge-service/bridge-service.md) for the full reference.
+See [Tenant data via `BridgeService`](../bridge-service/bridge-service.md) for the full reference.
 
 ## 8. Token forwarding between microservices
 

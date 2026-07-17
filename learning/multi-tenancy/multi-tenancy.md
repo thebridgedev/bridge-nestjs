@@ -1,7 +1,9 @@
 # Multi-Tenancy Patterns
 
-> Looking for the current tenant's subscription, entitlements, or branding inside a request? See
-> [Tenant Data — `BridgeService`](../bridge-service/bridge-service.md) (`bridge.fromJwt(jwt)`).
+> Looking for the current workspace's subscription, entitlements, or branding inside a request? See
+> [Tenant Data (`BridgeService`)](../bridge-service/bridge-service.md) (`bridge.fromJwt(jwt)`).
+
+These patterns cover how to separate and provision data per workspace (called a *tenant* in the API).
 
 ### Data separation strategies
 
@@ -26,9 +28,9 @@ export class Item {
 }
 ```
 
-**2. Schema-based separation** — separate database schema per tenant (more isolation, more complexity).
+**2. Schema-based separation**: separate database schema per workspace (more isolation, more complexity).
 
-**3. Database-based separation** — completely separate databases per tenant (maximum isolation, highest complexity).
+**3. Database-based separation**: completely separate databases per workspace (maximum isolation, highest complexity).
 
 ### Just-in-Time (JIT) provisioning
 
@@ -65,13 +67,13 @@ export class TenantsService {
 
 ### Webhook-based provisioning
 
-Bridge sends webhooks when tenants and users are created:
+Bridge sends webhooks when workspaces and users are created:
 
-- `TENANT_CREATED` — new workspace/account created
-- `TENANT_UPDATED` — workspace details changed
-- `TENANT_USER_CREATED` — new user added to workspace
-- `TENANT_USER_UPDATED` — user details changed
-- `TENANT_USER_DELETED` — user removed from workspace
+- `TENANT_CREATED`: new workspace/account created
+- `TENANT_UPDATED`: workspace details changed
+- `TENANT_USER_CREATED`: new user added to workspace
+- `TENANT_USER_UPDATED`: user details changed
+- `TENANT_USER_DELETED`: user removed from workspace
 
 ```typescript
 import { Controller, Post, Body, Headers } from '@nestjs/common';
@@ -126,7 +128,7 @@ The most robust approach combines both methods:
 ```typescript
 @Injectable()
 export class TenantsService {
-  // Called from webhook — primary provisioning path
+  // Called from webhook: primary provisioning path
   async createTenant(data: { id: string; name: string; plan?: string }): Promise<Tenant> {
     const existing = await this.tenantRepo.findOne({ where: { id: data.id } });
     if (existing) return existing; // JIT already handled it
@@ -140,7 +142,7 @@ export class TenantsService {
     return tenant;
   }
 
-  // Called on each request — JIT fallback
+  // Called on each request: JIT fallback
   async ensureTenant(tenantId: string, tenantName: string): Promise<Tenant> {
     let tenant = await this.tenantRepo.findOne({ where: { id: tenantId } });
 
@@ -159,9 +161,9 @@ export class TenantsService {
 }
 ```
 
-### Scoping queries by tenant
+### Scoping queries by workspace
 
-Always scope database queries by tenant to ensure data isolation. Never trust the client to provide the tenant ID — always get it from the authenticated user's token:
+Always scope database queries by workspace to ensure data isolation. Never trust the client to provide the tenant ID; always get it from the authenticated user's token:
 
 ```typescript
 @Controller('items')
@@ -180,7 +182,7 @@ export class ItemsController {
     @Param('id') id: string,
     @CurrentUser() user: BridgeUser,
   ) {
-    // Scoped to user's tenant — can't access other tenants' data
+    // Scoped to user's tenant, so other tenants' data can't be reached
     const item = await this.itemsService.findOne(id, user.tenantId);
     if (!item) throw new NotFoundException('Item not found');
     return item;

@@ -4,7 +4,7 @@
 
 ```typescript
 interface BridgeConfig {
-  /** Your Bridge application ID (required) */
+  /** Your Bridge app ID (required) */
   appId: string;
 
   /** Base URL for the Bridge API. All endpoints are derived from this.
@@ -17,15 +17,25 @@ interface BridgeConfig {
   /** Enable debug logging (default: false) */
   debug?: boolean;
 
-  /** Override the JWKS URL for API token verification.
-   *  @default {apiBaseUrl}/auth/account/app/.well-known/jwks.json */
-  apiTokenJwksUrl?: string;
+  /** Override the token-introspection URL for API token verification.
+   *  API tokens are signed with a per-app secret your app never holds, so
+   *  they're verified by POSTing them to the Bridge rather than locally.
+   *  @default {apiBaseUrl}/account/api-token/introspect */
+  introspectionUrl?: string;
+
+  /** How long (ms) a successful API-token introspection is cached, keyed
+   *  by token. 0 disables caching: every request introspects, so
+   *  revocation is instant.
+   *  @default 0 */
+  introspectionCacheTtlMs?: number;
 
   /** Override the JWKS URL for user JWT verification.
    *  @default {apiBaseUrl}/auth/.well-known/jwks.json */
   userJwksUrl?: string;
 }
 ```
+
+`introspectionUrl` and `userJwksUrl` exist mainly for containers that can't reach the public `apiBaseUrl` from inside their own network (a Docker Compose setup resolving Bridge's API by an internal hostname, for instance). Leave them unset and they're derived automatically.
 
 ### BridgeModule.forRoot()
 
@@ -97,9 +107,11 @@ interface BridgeModuleAsyncOptions {
 
 ### Environment variables
 
+Nothing is read from the environment automatically; `BridgeConfig` is always an object you build and pass in. The common pattern is reading from `process.env` yourself (directly in `forRoot`, or via `ConfigService` in `forRootAsync`):
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BRIDGE_APP_ID` | Your Bridge application ID | (required) |
+| `BRIDGE_APP_ID` | Your Bridge app ID | (required) |
 | `BRIDGE_API_BASE_URL` | Bridge API base URL | `https://api.thebridge.dev` |
 | `BRIDGE_DEBUG` | Enable debug logging | `false` |
 
@@ -125,7 +137,8 @@ interface RouteRule {
   /** Required privilege level for this route */
   privilege: RoutePrivilege;
 
-  /** Optional plan restriction — tenant plan must be in this list */
+  /** Present on the type for a future plan-restriction feature.
+   *  Not currently enforced by BridgeAuthGuard. */
   plans?: string[];
 }
 ```
@@ -152,9 +165,6 @@ BridgeModule.forRoot({
       { path: '/users/*', privilege: 'USER_READ' },
       { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
 
-      // Restrict by subscription plan
-      { path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] },
-
       // GraphQL operation rules
       { graphqlOperation: 'listUsers', privilege: 'USER_READ' },
       { graphqlOperation: 'deleteUser', privilege: 'USER_WRITE' },
@@ -162,6 +172,8 @@ BridgeModule.forRoot({
   },
 })
 ```
+
+> The `plans` field on `RouteRule` is not enforced by `BridgeAuthGuard` yet. To gate a route by subscription plan today, check entitlements or the plan programmatically with `BridgeService`; see [Tenant Data (`BridgeService`)](../bridge-service/bridge-service.md).
 
 ### RoutePrivilege type reference
 
@@ -180,7 +192,7 @@ type RoutePrivilege =
 
 ```typescript
 interface GuardConfig {
-  /** Enable global guard — applies to all routes (default: false) */
+  /** Enable global guard, applied to all routes (default: false) */
   global?: boolean;
 
   /** Default access level when no rule matches (default: 'protected') */
