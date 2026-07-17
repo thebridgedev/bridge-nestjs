@@ -8,18 +8,20 @@ The `BridgeAuthGuard` returns RFC 6750-compliant `WWW-Authenticate` response hea
 
 | `WWW-Authenticate` error | Meaning | Recommended action |
 |---|---|---|
-| `missing_token` | No Authorization header was sent | Redirect to login |
+| `missing_token` | No Authorization header was sent | Redirect to sign-in |
 | `expired_token` | Token signature is valid but past expiry | Attempt silent refresh, then redirect |
-| `invalid_token` | Token is malformed, tampered, or uses an unknown key | Redirect to login |
+| `invalid_token` | Token is malformed, tampered, or uses an unknown key | Redirect to sign-in |
 
 ### Frontend auto-refresh pattern
 
+This example uses the `auth` object from `@nebulr-group/bridge-svelte` (a lazy proxy to the `BridgeAuth` singleton); `@nebulr-group/bridge-react` exposes the same capabilities through its `useBridgeToken()` hook (`getAccessToken`, `login`, `logout`).
+
 ```typescript
 // src/lib/api.ts
-import { auth } from '@nebulr-group/bridge-react'; // or bridge-svelte
+import { auth } from '@nebulr-group/bridge-svelte';
 
 async function apiFetch(endpoint: string, options: RequestInit = {}) {
-  const token = auth.getAccessToken();
+  const token = auth.getTokens()?.accessToken;
 
   const response = await fetch(`http://localhost:3000${endpoint}`, {
     ...options,
@@ -35,8 +37,8 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
 
     if (wwwAuth.includes('expired_token')) {
       try {
-        await auth.refresh();
-        const newToken = auth.getAccessToken();
+        await auth.refreshTokens();
+        const newToken = auth.getTokens()?.accessToken;
         return fetch(`http://localhost:3000${endpoint}`, {
           ...options,
           headers: {
@@ -46,13 +48,13 @@ async function apiFetch(endpoint: string, options: RequestInit = {}) {
           },
         }).then((r) => r.json());
       } catch {
-        auth.login();
+        await auth.login();
         return;
       }
     }
 
-    // missing_token or invalid_token — redirect to login
-    auth.login();
+    // missing_token or invalid_token: send the user back to sign in
+    await auth.login();
     return;
   }
 
@@ -133,11 +135,11 @@ Thrown by `JwksService` when token verification fails. Error codes:
 | Code | Meaning |
 |------|---------|
 | `TOKEN_EXPIRED` | JWT has expired |
-| `TOKEN_INVALID` | JWT is malformed or invalid |
+| `TOKEN_INVALID` | JWT is malformed or invalid; on the API-token path, introspection reported the token inactive (revoked, expired, forged) or not an API token |
 | `JWKS_NO_MATCH` | No matching key found in JWKS endpoint |
 | `CLAIM_VALIDATION_FAILED` | Token claim validation failed (e.g., wrong issuer or audience) |
 | `APP_MISMATCH` | API token was issued for a different app ID |
-| `UNKNOWN_ERROR` | Unexpected verification error |
+| `UNKNOWN_ERROR` | Unexpected verification error (including a failed introspection request) |
 
 These are mapped to RFC 6750 `WWW-Authenticate` errors by the guard:
 

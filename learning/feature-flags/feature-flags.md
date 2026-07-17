@@ -1,167 +1,79 @@
-# Feature Flags
-
-Bridge Feature Flags evaluates locally — the module keeps the flag rules in memory, evaluates against in-process context, and receives rule changes live. A flag check is a synchronous O(1) lookup: no network call, no `await`, safe in hot request paths.
-
-Flags work standalone: `BridgeFlagsModule` is auth-free and does not require any other Bridge module.
-
-### Setup
-
-```typescript
-// app.module.ts
-import { Module } from '@nestjs/common';
-import { BridgeFlagsModule } from '@nebulr-group/bridge-nestjs/flags';
-
-@Module({
-  imports: [
-    BridgeFlagsModule.forRoot({
-      apiBaseUrl: 'https://api.thebridge.dev',
-      apiKey: process.env.BRIDGE_API_KEY!,
-    }),
-  ],
-})
-export class AppModule {}
-```
-
-`forRootAsync` is available when the API key comes from `ConfigModule`. The module is `@Global()` — register once, inject anywhere.
-
-### Programmatic checks — BridgeFlagsService
-
-```typescript
-import { Injectable } from '@nestjs/common';
-import { BridgeFlagsService } from '@nebulr-group/bridge-nestjs/flags';
-
-@Injectable()
-export class ReportsService {
-  constructor(private readonly flags: BridgeFlagsService) {}
-
-  generate(userId: string) {
-    // Synchronous — local evaluation, no network call
-    if (this.flags.flag('use_new_pipeline', false, { identity: userId })) {
-      return this.generateV2();
-    }
-    return this.generateV1();
-  }
-}
-```
-
-`flag<T>(key, defaultValue, context?)` returns the evaluated value, typed from your default (`boolean` | `string` | `number` | JSON object). The default is mandatory — it's what you get when the flag isn't configured or Bridge is unreachable. A flag call can never break your app.
-
-### Identity on the backend
-
-A server process is not "a user," so the SDK never invents an identity — you pass one per eval (or per request scope):
-
-```typescript
-// On behalf of the requesting user
-this.flags.flag('feature_x', false, { identity: req.user.id });
-
-// Sticky per-tenant behavior (webhooks, queues)
-this.flags.flag('new_pipeline', false, { identity: tenantId });
-
-// System-level flag, no identity
-this.flags.flag('worker_v2_enabled', false);
-```
-
-**Percentage rollouts require identity.** If a rollout rule is active and no identity is passed, the SDK refuses the rollout and returns the safe default with a warning — it will not silently randomize per call.
-
-### Route guards — @RequireFlag
-
-Gate handlers on a flag with the guard + decorator pair:
-
-```typescript
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { RequireFlag, BridgeFlagGuard } from '@nebulr-group/bridge-nestjs/flags';
-
-@Controller('exports')
-@UseGuards(BridgeFlagGuard)
-export class ExportsController {
-  @Get()
-  @RequireFlag('exports_enabled')
-  list() { /* … */ }
-
-  // Non-boolean flags: gate on a specific value
-  @Get('beta')
-  @RequireFlag('export_mode', 'v1', { equals: 'v2' })
-  betaExport() { /* … */ }
-}
-```
-
-`RequireFlag(key, defaultValue = false, options?)` — `options.equals` gates non-boolean flags on a specific value; `options.optional: true` skips the guard instead of rejecting (useful for kill switches that should disable a route without 403'ing).
-
-### Flag values as handler parameters — @Flag
-
-```typescript
-import { Controller, Get } from '@nestjs/common';
-import { Flag } from '@nebulr-group/bridge-nestjs/flags';
-
-@Controller('home')
-export class HomeController {
-  @Get()
-  home(@Flag({ key: 'show_new_home', defaultValue: false }) showNew: boolean) {
-    return showNew ? this.newHome() : this.classicHome();
-  }
-}
-```
-
-For typed reusable params, wrap with `useFlagParam<T>(key, defaultValue)`.
-
-### Frontend context propagation — BridgeContextInterceptor
-
-When your frontend also evaluates flags for the same user, both sides must agree on identity or buckets split-brain. The frontend Bridge SDKs send the eval context in the `x-bridge-context` header; `BridgeContextInterceptor` reads it and binds it to the request, so guard checks, `@Flag` params, and request-scoped evals automatically use the same identity the frontend used:
-
-```typescript
-import { APP_INTERCEPTOR } from '@nestjs/core';
-import { BridgeContextInterceptor } from '@nebulr-group/bridge-nestjs/flags';
-
-@Module({
-  providers: [{ provide: APP_INTERCEPTOR, useClass: BridgeContextInterceptor }],
-})
-export class AppModule {}
-```
-
-Missing or malformed headers are a no-op — the request falls back to the module's global context.
-
-**Security rule:** the propagated context should carry identity and custom attributes only. Never trust client-sent `role`/`plan` attributes — read those from server-side sources (see attribute providers below).
-
-### Bridge-managed attributes
-
-To target rules on verified auth state (`bridge:user.role`, `bridge:tenant.plan`), register an `AuthAttributeProvider` that reads your verified JWT claims:
-
-```typescript
-import { AuthAttributeProvider } from '@nebulr-group/bridge-auth-core';
-
-// once at bootstrap
-this.flags.bridge.registerAttributeProvider(
-  new AuthAttributeProvider({ getClaims: () => getCurrentClaims() }),
-);
-```
-
-Providers are consulted synchronously on every eval; dev-supplied attributes win on key collision (the admin UI surfaces collisions).
-
-### Pull mode
-
-Runtimes that can't hold a live connection can use the pull cache (`BridgePullCache`, default TTL 30 s) — inject via `@Inject(BRIDGE_PULL_CACHE)`. Evals stay local; the rule set refreshes by polling instead of push.
-
-### Multi-type values
-
-```typescript
-const maxUploads = this.flags.flag('max_uploads', 10);                       // number
-const mode       = this.flags.flag('pipeline_mode', 'stable');               // string
-const rateLimit  = this.flags.flag('rate_limit', { window: 60, max: 100 }); // JSON
-```
-
-A type mismatch (admin stored a different type than your default suggests) returns the default and logs a warning.
-
+---
+title: Feature Flags
+order: 40
+oneLiner: Ship behind a flag and change who sees what, live from Control Center, no redeploy.
+related: [auth, payments]
 ---
 
-### On-demand checks over the Bridge API
+# Feature Flags
 
-`@RequireFlag` / `BridgeFlagsService` (above) evaluate locally and receive live updates. If you'd rather not run a flags client — for simple route gating or an occasional check — `@RequireFeatureFlag` / `FeatureFlagService` evaluate flags on demand over the Bridge API instead, keyed on the user's access token, with a 5-minute per-token cache:
+Bridge Feature Flags lets you ship code dark, roll it out gradually, target it
+at specific users, and kill it instantly, all without a deploy. The SDK
+evaluates flags locally: it keeps your flag rules in memory, evaluates them
+against in-process context, and receives rule changes over the live channel (a
+persistent realtime connection the SDK maintains). A flag check is a
+synchronous O(1) lookup with no network call and no `await`, safe in hot
+request paths.
 
-```typescript
-@RequireFeatureFlag({ all: ['premium-tier', 'reports-v2'] })   // decorator
-await this.featureFlags.isEnabled('pdf-export', accessToken);  // service, async, 5-min cache
-```
+Flags work standalone: an `apiBaseUrl` and an `apiKey` are all the
+configuration you need. `BridgeFlagsModule` is auth-free and requires no other
+Bridge module; Bridge auth and billing are optional context sources you can
+target on once they're wired in.
 
-`@RequireFeatureFlag` (with `any`/`all` requirement objects) and `FeatureFlagService.isEnabled / evaluateRequirement / bulkEvaluate` work with boolean flags.
+## The mental model
 
-**Which to use:** reach for `@RequireFlag` / `BridgeFlagsService.flag()` when you want synchronous, multi-type, live-updating evaluation; reach for `@RequireFeatureFlag` / `FeatureFlagService` when you just need a quick boolean check and don't want to run a flags client.
+1. **You create a flag in Control Center** (your admin dashboard at
+   app.thebridge.dev) and give it rules: on/off, a percentage rollout, or
+   conditions on attributes like `user.role` or `tenant.plan`.
+2. **The SDK evaluates those rules locally** against the eval context: the
+   identity and attributes a flag rule evaluates against. On a backend your
+   code supplies both; an attribute provider can feed verified auth claims in
+   once you register it.
+3. **Changes arrive live.** Edit a rule in Control Center and every connected
+   service updates in place, typically within seconds, over the live channel.
+   No restart, no redeploy.
+
+For the full picture (evaluation model, runtime modes, outage behavior), read
+[How flags work](/feature-flags/how-it-works/).
+
+## Get started
+
+[Get started](/feature-flags/get-started/) walks the whole loop in a few
+minutes: register `BridgeFlagsModule`, create a flag in Control Center, read
+it with `BridgeFlagsService.flag()`, then flip it and watch your service
+change live.
+
+## Using flags
+
+- [Use flags in your logic](/feature-flags/using/in-logic/): the
+  `BridgeFlagsService.flag()` API for branching code paths, plus multi-type
+  values (boolean, string, number, JSON).
+- [Guard routes](/feature-flags/using/guard-routes/): gate whole endpoints
+  behind a flag with `BridgeFlagGuard` + `@RequireFlag`; a request is rejected
+  before your handler ever runs.
+- [Receiving forwarded context](/feature-flags/using/backend/): read the eval
+  context a Bridge frontend forwards in the `x-bridge-context` header so your
+  server and the browser agree on identity and bucketing.
+
+## Targeting
+
+- [Target by plan or role](/feature-flags/targeting/by-plan-or-role/): register
+  an attribute provider once and attributes like `user.role` and `tenant.plan`
+  merge into every evaluation from your verified JWT claims. For plan-granted
+  features, prefer entitlement attributes; see
+  [Lock features to a plan](/billing/limits/lock-features/).
+- [Send context from your backend](/feature-flags/targeting/send-context/):
+  supply an `identity` for bucketing and app-specific facts (like a project
+  count) per call, per request via the interceptor, or module-wide via
+  `initialContext`.
+- [Target anonymous visitors](/feature-flags/targeting/anonymous/): reuse the
+  anonymous ID a Bridge frontend forwards, or supply your own stable identity,
+  so percentage rollouts bucket the same visitor the same way on both sides.
+
+> **Framework note:** The main `@nebulr-group/bridge-nestjs` entry point also
+> ships an on-demand path (`@RequireFeatureFlag` / `FeatureFlagService`) that
+> evaluates boolean flags over the Bridge API, keyed on the caller's access
+> token, with a 5-minute per-token cache. Reach for it when you just need a
+> quick boolean check and don't want to run a flags client; see
+> [Gate features by role or privilege](/auth/roles/gate-with-flags/) for how
+> the two mechanisms compare.
