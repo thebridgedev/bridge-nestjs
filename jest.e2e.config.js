@@ -25,6 +25,14 @@ module.exports = {
   globalSetup: '<rootDir>/e2e/global-setup.js',
   globalTeardown: '<rootDir>/e2e/global-teardown.js',
 
+  // auth-core (and its `jose` dependency) are published as native ESM, and the
+  // plugin reaches both transitively. Jest's CJS runner needs the same three
+  // adjustments the unit config (bridge-nestjs/jest.config.js) already makes,
+  // otherwise every suite dies at module-load with
+  // `SyntaxError: Unexpected token 'export'`:
+  //   1. transform `.js`/`.mjs` too — the ts-jest preset only registers .ts/.tsx
+  //   2. un-ignore those packages in node_modules
+  //   3. strip NodeNext `.js` suffixes from auth-core's internal subpath imports
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',
@@ -32,6 +40,29 @@ module.exports = {
         tsconfig: '<rootDir>/tsconfig.e2e.json',
       },
     ],
+    // Scoped to node_modules so the project's own CommonJS `.js` files (the
+    // global-setup/teardown wrappers, the plugin's built dist) are left alone —
+    // running them through ts-jest works but emits an `allowJs` warning per file.
+    'node_modules[\\\\/].+\\.m?js$': [
+      'ts-jest',
+      {
+        tsconfig: '<rootDir>/tsconfig.e2e.json',
+        isolatedModules: true,
+      },
+    ],
+  },
+
+  // Bun's isolated installs place packages under
+  //   node_modules/.bun/<name>@<ver>/node_modules/<name>/…
+  // so a pattern anchored on `node_modules/@nebulr-group/…` would never match.
+  // The `[+/]` covers bun's `+` encoding of the scope separator.
+  transformIgnorePatterns: [
+    'node_modules/(?!.*(@nebulr-group[+/]bridge-auth-core|jose[@/]))',
+  ],
+
+  moduleNameMapper: {
+    '^@nebulr-group/bridge-auth-core/(.*)\\.js$':
+      '@nebulr-group/bridge-auth-core/$1',
   },
 
   // E2E tests are slower than unit tests — allow up to 30s per test

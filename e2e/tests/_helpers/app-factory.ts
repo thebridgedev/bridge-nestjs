@@ -39,20 +39,18 @@ import { AppModule } from '../../../demo/src/app.module';
  * to free ports and connections.
  */
 export async function createTestApp(): Promise<INestApplication> {
-  // BRIDGE_APP_ID must match the test app created by pre-setup.ts.
-  // Jest's setupFiles (load-test-env.ts) loads it from .env.test.local.
-  process.env.BRIDGE_APP_ID = process.env.BRIDGE_TEST_APP_ID;
-
-  // Use local auth base URL if provided (for tests against local bridge-api)
-  if (process.env.LOCAL_AUTH_BASE_URL) {
-    process.env.BRIDGE_AUTH_BASE_URL = process.env.LOCAL_AUTH_BASE_URL.replace(
-      /\/auth$/,
-      '',
+  // BRIDGE_APP_ID / BRIDGE_API_BASE_URL are set by e2e/load-test-env.ts
+  // (Jest setupFiles), NOT here. demo/src/app.module.ts reads them inside its
+  // @Module decorator, which is evaluated by the top-level import above —
+  // before this function ever runs. Assigning them here would be too late and
+  // would silently leave the demo app on 'demo-app-id' +
+  // https://api.thebridge.dev. Fail loudly instead of pointing at production.
+  if (!process.env.BRIDGE_APP_ID || !process.env.BRIDGE_API_BASE_URL) {
+    throw new Error(
+      'BRIDGE_APP_ID / BRIDGE_API_BASE_URL are not set. e2e/load-test-env.ts ' +
+        'must run as a Jest setupFile before demo/src/app.module.ts is imported. ' +
+        'Refusing to run against the production default apiBaseUrl.',
     );
-  }
-  if (process.env.LOCAL_TEST_DATA_API_URL) {
-    process.env.BRIDGE_BACKENDLESS_BASE_URL =
-      process.env.LOCAL_TEST_DATA_API_URL;
   }
 
   const moduleFixture = await Test.createTestingModule({

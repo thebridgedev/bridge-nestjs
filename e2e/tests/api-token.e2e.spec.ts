@@ -46,6 +46,49 @@ class ApiTokenTestController {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: mint an app-scoped JWT for the e2e test app
+//
+// POST /account/api-token/app reads `request.AUTHENTICATED_APP`, which the
+// app-authentication middleware only populates from an *app JWT* presented as
+// `x-api-key`. The playwright test-data key (`x-playwright-api-key`) is a
+// different credential entirely and never establishes an authenticated app —
+// passing it as `x-api-key` yields 401. bridge-api exposes a test-only endpoint
+// that mints the right JWT for an app domain; bridge-api's own
+// e2e/jest/global-setup.js uses the same call to build its E2E_API_KEY.
+// ---------------------------------------------------------------------------
+
+async function generateAppJwt(
+  testDataApiUrl: string,
+  playwrightApiKey: string,
+  appDomain: string,
+): Promise<string> {
+  const res = await fetch(
+    `${testDataApiUrl}/account/test/playwright/generate-jwt`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-playwright-api-key': playwrightApiKey,
+      },
+      body: JSON.stringify({ appDomain }),
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `Failed to generate app JWT for ${appDomain} (${res.status}): ${body}`,
+    );
+  }
+
+  const data = (await res.json()) as { token: string };
+  if (!data.token) {
+    throw new Error(`generate-jwt returned no token for ${appDomain}`);
+  }
+  return data.token;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: create an API token via the bridge-api
 // ---------------------------------------------------------------------------
 
@@ -97,25 +140,33 @@ describe('API token authentication (E2E)', () => {
     account = await testDataClient.createTestAccount();
     userAccessToken = (await authClient.getToken(account.email, account.password)).accessToken;
 
-    // Create API tokens via bridge-api
-    apiTokenWithPrivilege = await createApiToken(
+    // Create API tokens via bridge-api. The creating credential must be an app
+    // JWT, not the playwright test-data key.
+    const appJwt = await generateAppJwt(
       config.testDataApiUrl,
       config.testDataApiKey,
-      ['USER_READ'],
+      config.appDomain,
     );
+
+    apiTokenWithPrivilege = await createApiToken(config.testDataApiUrl, appJwt, [
+      'USER_READ',
+    ]);
     apiTokenWithoutPrivilege = await createApiToken(
       config.testDataApiUrl,
-      config.testDataApiKey,
+      appJwt,
       ['TENANT_READ'],
     );
-    apiTokenEmpty = await createApiToken(config.testDataApiUrl, config.testDataApiKey, []);
+    apiTokenEmpty = await createApiToken(config.testDataApiUrl, appJwt, []);
 
-    // Build a test NestJS app with BridgeModule wired to the real bridge-api JWKS
+    // Build a test NestJS app with BridgeModule wired to the real bridge-api.
+    // `apiBaseUrl` is the only base BridgeConfig has — it must be set explicitly
+    // to the local test API, otherwise it defaults to https://api.thebridge.dev
+    // and this suite would introspect tokens against production.
     const moduleFixture = await Test.createTestingModule({
       imports: [
         BridgeModule.forRoot({
           appId: config.appId,
-          authBaseUrl: config.testDataApiUrl,
+          apiBaseUrl: config.testDataApiUrl,
           guard: { global: false },
         }),
       ],
@@ -176,23 +227,25 @@ describe('Privilege enforcement (E2E)', () => {
     account = await testDataClient.createTestAccount();
     userAccessToken = (await authClient.getToken(account.email, account.password)).accessToken;
 
-    tokenWithPrivilege = await createApiToken(
+    const appJwt = await generateAppJwt(
       config.testDataApiUrl,
       config.testDataApiKey,
-      ['USER_READ'],
+      config.appDomain,
     );
-    tokenMissingPrivilege = await createApiToken(
-      config.testDataApiUrl,
-      config.testDataApiKey,
-      ['TENANT_READ'],
-    );
-    tokenEmptyPrivileges = await createApiToken(config.testDataApiUrl, config.testDataApiKey, []);
+
+    tokenWithPrivilege = await createApiToken(config.testDataApiUrl, appJwt, [
+      'USER_READ',
+    ]);
+    tokenMissingPrivilege = await createApiToken(config.testDataApiUrl, appJwt, [
+      'TENANT_READ',
+    ]);
+    tokenEmptyPrivileges = await createApiToken(config.testDataApiUrl, appJwt, []);
 
     const moduleFixture = await Test.createTestingModule({
       imports: [
         BridgeModule.forRoot({
           appId: config.appId,
-          authBaseUrl: config.testDataApiUrl,
+          apiBaseUrl: config.testDataApiUrl,
           guard: { global: false },
         }),
       ],

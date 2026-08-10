@@ -9,25 +9,31 @@ import { ForwardController } from './forward/forward.controller';
 @Module({
   imports: [
     BridgeModule.forRoot({
+      // `apiBaseUrl` is the single base the plugin derives auth + account URLs
+      // from. This file previously passed `authBaseUrl` / `backendlessBaseUrl`,
+      // neither of which exists on BridgeConfig — so the demo (and every e2e
+      // suite that boots it) failed to compile, and had it compiled the ignored
+      // override would have silently left apiBaseUrl on its production default.
       appId: process.env.BRIDGE_APP_ID || 'demo-app-id',
-      authBaseUrl: process.env.BRIDGE_AUTH_BASE_URL,
-      backendlessBaseUrl: process.env.BRIDGE_BACKENDLESS_BASE_URL,
+      apiBaseUrl: process.env.BRIDGE_API_BASE_URL,
       debug: process.env.BRIDGE_DEBUG === 'true',
       guard: {
         global: true,
         defaultAccess: 'protected',
         rules: [
-          // Public routes
-          { path: '/health', public: true },
-          { path: '/api/public/*', public: true },
-          
-          // Role-based routes
-          { path: '/admin/*', role: 'ADMIN' },
-          
-          // Feature flag routes
-          { path: '/beta/*', featureFlag: 'beta-access' },
-          { path: '/premium/*', featureFlag: { all: ['premium-tier', 'active-subscription'] } },
+          // Public routes. A RouteRule carries a `privilege`, and 'ANONYMOUS'
+          // is what the guard short-circuits on — there is no `public: true`
+          // rule form (that's the `@Public()` decorator, which /health also
+          // already uses).
+          { path: '/health', privilege: 'ANONYMOUS' },
+          { path: '/api/public/*', privilege: 'ANONYMOUS' },
         ],
+        // Role and feature-flag gating are decorator-driven, not rule-driven:
+        // `@RequireRole` / `@RequireFeatureFlag` on the handler. The demo
+        // controllers already declare them that way — see
+        // admin.controller.ts (@RequireRole('OWNER')) and
+        // beta.controller.ts (@RequireFeatureFlag). The `role:` / `featureFlag:`
+        // rules that used to sit here were never a supported RouteRule shape.
       },
     }),
   ],
