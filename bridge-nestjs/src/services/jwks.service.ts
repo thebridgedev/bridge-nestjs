@@ -1,181 +1,76 @@
 import { Injectable } from '@nestjs/common';
-import { createRemoteJWKSet, jwtVerify, errors as joseErrors, JWTPayload } from 'jose';
+import {
+  JwksService as CoreJwksService,
+  TokenVerificationError,
+} from '@nebulr-group/bridge-auth-core/backend';
+import type { ApiTokenClaims } from '@nebulr-group/bridge-auth-core/backend';
 import { BridgeConfigService } from './bridge-config.service';
 import { JwtClaims } from '../types/user';
 
 /**
- * Claims present in a Bridge API token JWT.
- */
-export interface ApiTokenClaims extends JWTPayload {
-  sub: string;
-  appId: string;
-  tenantId: string | null;
-  type: 'api';
-  privileges: string[];
-}
-
-/**
- * Service for JWKS-based JWT verification
+ * NestJS wrapper around auth-core's framework-agnostic token verifier.
+ *
+ * TBP-411 — this used to carry its own jose/JWKS implementation for both token
+ * kinds. That worked for user tokens but could never work for API tokens: the
+ * Bridge signs those HS256 with a per-app secret, so there is no public key to
+ * fetch, and the endpoint it pointed at published the symmetric secret as an
+ * `oct` JWK behind auth. API tokens are now verified by calling the Bridge's
+ * introspection endpoint instead — no keys on the developer's side, and
+ * revocation takes effect within the cache TTL (0 by default, i.e. instantly).
+ *
+ * The verification logic itself lives in auth-core so bridge-nestjs,
+ * bridge-nextjs and any future backend plugin share one implementation. This
+ * class only adapts NestJS DI onto it; the public surface — `verifyToken`,
+ * `verifyApiToken`, `TokenVerificationError`, `ApiTokenClaims` — is unchanged,
+ * so call sites and consumers need no edits.
  */
 @Injectable()
 export class JwksService {
-  private jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-  private jwksInitTime: number = 0;
-
-  private apiTokenJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-  private apiTokenJwksInitTime: number = 0;
-
-  private readonly JWKS_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+  private core: CoreJwksService | null = null;
 
   constructor(private readonly configService: BridgeConfigService) {}
 
   /**
-   * Initialize or refresh the user-token JWKS client
+   * Built lazily rather than in the constructor: `BridgeConfigService` getters
+   * derive URLs from config that must be fully resolved first, and a NestJS
+   * provider is instantiated before we can guarantee that.
    */
-  private ensureJwks(): ReturnType<typeof createRemoteJWKSet> {
-    const now = Date.now();
-
-    if (!this.jwks || now - this.jwksInitTime > this.JWKS_CACHE_TTL_MS) {
-      this.configService.log('Initializing JWKS client', { url: this.configService.jwksUrl });
-      this.jwks = createRemoteJWKSet(new URL(this.configService.jwksUrl));
-      this.jwksInitTime = now;
-    }
-
-    return this.jwks;
-  }
-
-  /**
-   * Initialize or refresh the API token JWKS client (cached independently).
-   */
-  private ensureApiTokenJwks(): ReturnType<typeof createRemoteJWKSet> {
-    const now = Date.now();
-
-    if (!this.apiTokenJwks || now - this.apiTokenJwksInitTime > this.JWKS_CACHE_TTL_MS) {
-      this.configService.log('Initializing API token JWKS client', {
-        url: this.configService.apiTokenJwksUrl,
-      });
-      this.apiTokenJwks = createRemoteJWKSet(new URL(this.configService.apiTokenJwksUrl));
-      this.apiTokenJwksInitTime = now;
-    }
-
-    return this.apiTokenJwks;
-  }
-
-  /**
-   * Verify a user JWT token and return the claims.
-   *
-   * @param token - The JWT token to verify
-   * @returns The verified JWT claims
-   * @throws TokenVerificationError if token is invalid
-   */
-  async verifyToken(token: string): Promise<JwtClaims> {
-    const jwks = this.ensureJwks();
-
-    try {
-      const { payload } = await jwtVerify(token, jwks, {
+  private get service(): CoreJwksService {
+    if (!this.core) {
+      this.core = new CoreJwksService({
+        jwksUrl: this.configService.jwksUrl,
+        introspectionUrl: this.configService.introspectionUrl,
         issuer: this.configService.authBaseUrl,
         audience: this.configService.appId,
+        introspectionCacheTtlMs: this.configService.introspectionCacheTtlMs,
+        log: (message: string, ...args: unknown[]) => this.configService.log(message, ...args),
       });
-
-      this.configService.log('Token verified successfully', {
-        sub: payload.sub,
-        iss: payload.iss,
-        aud: payload.aud,
-      });
-
-      return payload as JwtClaims;
-    } catch (error) {
-      if (error instanceof joseErrors.JWTExpired) {
-        this.configService.log('Token verification failed: Token expired');
-        throw new TokenVerificationError('Token expired', 'TOKEN_EXPIRED');
-      }
-      if (error instanceof joseErrors.JWTInvalid) {
-        this.configService.log('Token verification failed: Invalid token');
-        throw new TokenVerificationError('Invalid token', 'TOKEN_INVALID');
-      }
-      if (error instanceof joseErrors.JWKSNoMatchingKey) {
-        this.configService.log('Token verification failed: No matching key in JWKS');
-        throw new TokenVerificationError('Invalid token signature', 'JWKS_NO_MATCH');
-      }
-      if (error instanceof joseErrors.JWTClaimValidationFailed) {
-        this.configService.log('Token verification failed: Claim validation failed', error.message);
-        throw new TokenVerificationError('Token claim validation failed', 'CLAIM_VALIDATION_FAILED');
-      }
-
-      this.configService.log('Token verification failed: Unknown error', error);
-      throw new TokenVerificationError('Token verification failed', 'UNKNOWN_ERROR');
     }
+    return this.core;
   }
 
   /**
-   * Verify a Bridge API token JWT and return the claims.
+   * Verify a user JWT (PS256, verified against the Bridge JWKS) and return its
+   * claims.
    *
-   * Uses a separate JWKS client (cached independently from the user-token client).
+   * @throws TokenVerificationError if the token is invalid or expired
+   */
+  async verifyToken(token: string): Promise<JwtClaims> {
+    return this.service.verifyToken(token) as Promise<JwtClaims>;
+  }
+
+  /**
+   * Verify a Bridge API token via introspection and return its claims.
    *
-   * @param token - The JWT API token to verify
-   * @param expectedAppId - The app ID the token should be issued for
-   * @returns The verified API token claims
-   * @throws TokenVerificationError if token is invalid, expired, wrong type, or wrong app
+   * Rejects tokens that are inactive (revoked or expired), not of type `api`,
+   * or issued for a different app than `expectedAppId`.
+   *
+   * @throws TokenVerificationError with code `APP_MISMATCH` on wrong-app tokens
    */
   async verifyApiToken(token: string, expectedAppId: string): Promise<ApiTokenClaims> {
-    const jwks = this.ensureApiTokenJwks();
-
-    try {
-      const { payload } = await jwtVerify(token, jwks);
-
-      if (payload['type'] !== 'api') {
-        throw new TokenVerificationError('Wrong token type', 'TOKEN_INVALID');
-      }
-
-      if (payload['appId'] !== expectedAppId) {
-        throw new TokenVerificationError('Token issued for a different app', 'APP_MISMATCH');
-      }
-
-      this.configService.log('API token verified successfully', {
-        sub: payload.sub,
-        appId: payload['appId'],
-      });
-
-      return payload as ApiTokenClaims;
-    } catch (error) {
-      if (error instanceof TokenVerificationError) {
-        throw error;
-      }
-      if (error instanceof joseErrors.JWTExpired) {
-        this.configService.log('API token verification failed: Token expired');
-        throw new TokenVerificationError('Token expired', 'TOKEN_EXPIRED');
-      }
-      if (error instanceof joseErrors.JWTInvalid) {
-        this.configService.log('API token verification failed: Invalid token');
-        throw new TokenVerificationError('Invalid token', 'TOKEN_INVALID');
-      }
-      if (error instanceof joseErrors.JWKSNoMatchingKey) {
-        this.configService.log('API token verification failed: No matching key in JWKS');
-        throw new TokenVerificationError('Invalid token signature', 'JWKS_NO_MATCH');
-      }
-      if (error instanceof joseErrors.JWTClaimValidationFailed) {
-        this.configService.log(
-          'API token verification failed: Claim validation failed',
-          error.message,
-        );
-        throw new TokenVerificationError('Token claim validation failed', 'CLAIM_VALIDATION_FAILED');
-      }
-
-      this.configService.log('API token verification failed: Unknown error', error);
-      throw new TokenVerificationError('Token verification failed', 'UNKNOWN_ERROR');
-    }
+    return this.service.verifyApiToken(token, expectedAppId);
   }
 }
 
-/**
- * Error class for token verification failures
- */
-export class TokenVerificationError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-  ) {
-    super(message);
-    this.name = 'TokenVerificationError';
-  }
-}
+export { TokenVerificationError };
+export type { ApiTokenClaims };

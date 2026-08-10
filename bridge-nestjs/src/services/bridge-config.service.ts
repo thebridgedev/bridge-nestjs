@@ -13,7 +13,8 @@ export class BridgeConfigService {
     apiBaseUrl: string;
     debug: boolean;
     guard: BridgeConfig['guard'];
-    apiTokenJwksUrl: string | undefined;
+    introspectionUrl: string | undefined;
+    introspectionCacheTtlMs: number | undefined;
     userJwksUrl: string | undefined;
   };
 
@@ -23,7 +24,8 @@ export class BridgeConfigService {
       apiBaseUrl: config.apiBaseUrl || BRIDGE_DEFAULTS.apiBaseUrl,
       debug: config.debug ?? BRIDGE_DEFAULTS.debug,
       guard: config.guard,
-      apiTokenJwksUrl: config.apiTokenJwksUrl,
+      introspectionUrl: config.introspectionUrl,
+      introspectionCacheTtlMs: config.introspectionCacheTtlMs,
       userJwksUrl: config.userJwksUrl,
     };
   }
@@ -72,14 +74,26 @@ export class BridgeConfigService {
   }
 
   /**
-   * JWKS URL for API token verification.
-   * Uses apiTokenJwksUrl override if configured, otherwise derived from apiBaseUrl.
+   * Token-introspection URL for API token verification (TBP-411).
+   *
+   * API tokens are HS256-signed with the per-app secret, which this plugin
+   * never holds, so they cannot be verified locally. The token is POSTed here
+   * and the Bridge answers with its claims — which also gives revocation
+   * without any key management on the developer's side.
+   *
+   * Uses the `introspectionUrl` override if configured, otherwise derived from
+   * apiBaseUrl.
    */
-  get apiTokenJwksUrl(): string {
-    return (
-      this.config.apiTokenJwksUrl ??
-      `${this.authBaseUrl}/account/app/.well-known/jwks.json`
-    );
+  get introspectionUrl(): string {
+    return this.config.introspectionUrl ?? `${this.apiBaseUrl}/account/api-token/introspect`;
+  }
+
+  /**
+   * Introspection cache TTL in ms. `0` (the default) introspects on every
+   * request, so a revoked token stops working immediately.
+   */
+  get introspectionCacheTtlMs(): number {
+    return this.config.introspectionCacheTtlMs ?? 0;
   }
 
   /**
