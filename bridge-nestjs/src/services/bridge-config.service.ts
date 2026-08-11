@@ -74,20 +74,26 @@ export class BridgeConfigService {
   }
 
   /**
-   * Token-introspection URL for API token verification.
-   * Uses introspectionUrl override if configured, otherwise derived from
+   * Token-introspection URL for API token verification (TBP-411).
+   *
+   * API tokens are HS256-signed with the per-app secret, which this plugin
+   * never holds, so they cannot be verified locally. The token is POSTed here
+   * and the Bridge answers with its claims — which also gives revocation
+   * without any key management on the developer's side.
+   *
+   * Uses the `introspectionUrl` override if configured, otherwise derived from
    * apiBaseUrl. Note: this lives directly under apiBaseUrl (NOT under /auth).
    */
   get introspectionUrl(): string {
-    return (
-      this.config.introspectionUrl ??
-      `${this.config.apiBaseUrl}/account/api-token/introspect`
-    );
+    return this.config.introspectionUrl ?? `${this.apiBaseUrl}/account/api-token/introspect`;
   }
 
-  /** How long (ms) successful introspections are cached. 0 = disabled. */
-  get introspectionCacheTtlMs(): number | undefined {
-    return this.config.introspectionCacheTtlMs;
+  /**
+   * Introspection cache TTL in ms. `0` (the default) introspects on every
+   * request, so a revoked token stops working immediately.
+   */
+  get introspectionCacheTtlMs(): number {
+    return this.config.introspectionCacheTtlMs ?? 0;
   }
 
   /**

@@ -96,7 +96,7 @@ BridgeModule.forRootAsync({
 }),
 ```
 
-**Docker / private-network note:** if the container can't reach the public `apiBaseUrl`, override the JWKS URLs directly with `apiTokenJwksUrl` and `userJwksUrl` so verification keys resolve over your internal network.
+**Docker / private-network note:** if the container can't reach the public `apiBaseUrl`, override the verification endpoints directly so they resolve over your internal network: `userJwksUrl` for user JWTs (verified against the Bridge JWKS) and `introspectionUrl` for API tokens (verified by POSTing them to the Bridge, since they are HS256-signed with a per-app secret your app never holds).
 
 ## Mark public endpoints
 

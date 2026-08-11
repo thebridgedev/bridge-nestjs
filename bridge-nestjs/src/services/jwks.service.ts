@@ -1,36 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import {
   JwksService as CoreJwksService,
-  TokenVerificationError as CoreTokenVerificationError,
+  TokenVerificationError,
 } from '@nebulr-group/bridge-auth-core/backend';
-import type { ApiTokenClaims as CoreApiTokenClaims } from '@nebulr-group/bridge-auth-core/backend';
+import type { ApiTokenClaims } from '@nebulr-group/bridge-auth-core/backend';
 import { BridgeConfigService } from './bridge-config.service';
 import { JwtClaims } from '../types/user';
 
 /**
- * Claims present in a Bridge API token JWT.
+ * NestJS wrapper around auth-core's framework-agnostic token verifier.
  *
- * Re-exported from auth-core/backend so existing imports
- * (`import { ApiTokenClaims } from '../services/jwks.service'`) keep working.
- */
-export type ApiTokenClaims = CoreApiTokenClaims;
-
-/**
- * Error class for token verification failures.
+ * TBP-411 — this used to carry its own jose/JWKS implementation for both token
+ * kinds. That worked for user tokens but could never work for API tokens: the
+ * Bridge signs those HS256 with a per-app secret, so there is no public key to
+ * fetch, and the endpoint it pointed at published the symmetric secret as an
+ * `oct` JWK behind auth. API tokens are now verified by calling the Bridge's
+ * introspection endpoint instead — no keys on the developer's side, and
+ * revocation takes effect within the cache TTL (0 by default, i.e. instantly).
  *
- * Re-exported from auth-core/backend so existing `instanceof TokenVerificationError`
- * checks and imports keep working unchanged. (Same class — not a subclass — so
- * `instanceof` is identical regardless of which path threw it.)
- */
-export const TokenVerificationError = CoreTokenVerificationError;
-export type TokenVerificationError = CoreTokenVerificationError;
-
-/**
- * NestJS DI wrapper around the framework-agnostic auth-core JwksService.
- *
- * Lazily constructs the core service on first use so the JWKS-config values
- * (which `BridgeConfigService` derives from module options) are read at request
- * time, matching the previous behavior. Public method signatures are unchanged.
+ * The verification logic itself lives in auth-core so bridge-nestjs,
+ * bridge-nextjs and any future backend plugin share one implementation. This
+ * class only adapts NestJS DI onto it; the public surface — `verifyToken`,
+ * `verifyApiToken`, `TokenVerificationError`, `ApiTokenClaims` — is unchanged,
+ * so call sites and consumers need no edits. Both symbols are the very ones
+ * auth-core exports (not subclasses), so `instanceof TokenVerificationError`
+ * holds regardless of which path threw.
  */
 @Injectable()
 export class JwksService {
@@ -38,40 +32,47 @@ export class JwksService {
 
   constructor(private readonly configService: BridgeConfigService) {}
 
-  private getCore(): CoreJwksService {
+  /**
+   * Built lazily rather than in the constructor: `BridgeConfigService` getters
+   * derive URLs from config that must be fully resolved first, and a NestJS
+   * provider is instantiated before we can guarantee that.
+   */
+  private get service(): CoreJwksService {
     if (!this.core) {
       this.core = new CoreJwksService({
         jwksUrl: this.configService.jwksUrl,
         introspectionUrl: this.configService.introspectionUrl,
-        introspectionCacheTtlMs: this.configService.introspectionCacheTtlMs,
         issuer: this.configService.authBaseUrl,
         audience: this.configService.appId,
-        log: (message, ...args) => this.configService.log(message, ...args),
+        introspectionCacheTtlMs: this.configService.introspectionCacheTtlMs,
+        log: (message: string, ...args: unknown[]) => this.configService.log(message, ...args),
       });
     }
     return this.core;
   }
 
   /**
-   * Verify a user JWT token and return the claims.
+   * Verify a user JWT (PS256, verified against the Bridge JWKS) and return its
+   * claims.
    *
-   * @param token - The JWT token to verify
-   * @returns The verified JWT claims
-   * @throws TokenVerificationError if token is invalid
+   * @throws TokenVerificationError if the token is invalid or expired
    */
   async verifyToken(token: string): Promise<JwtClaims> {
-    return this.getCore().verifyToken(token) as Promise<JwtClaims>;
+    return this.service.verifyToken(token) as Promise<JwtClaims>;
   }
 
   /**
-   * Verify a Bridge API token JWT and return the claims.
+   * Verify a Bridge API token via introspection and return its claims.
    *
-   * @param token - The JWT API token to verify
-   * @param expectedAppId - The app ID the token should be issued for
-   * @returns The verified API token claims
-   * @throws TokenVerificationError if token is invalid, expired, wrong type, or wrong app
+   * Rejects tokens that are inactive (revoked or expired), not of type `api`,
+   * or issued for a different app than `expectedAppId`.
+   *
+   * @throws TokenVerificationError with code `APP_MISMATCH` on wrong-app tokens
    */
   async verifyApiToken(token: string, expectedAppId: string): Promise<ApiTokenClaims> {
-    return this.getCore().verifyApiToken(token, expectedAppId) as Promise<ApiTokenClaims>;
+    return this.service.verifyApiToken(token, expectedAppId);
   }
 }
+
+export { TokenVerificationError };
+export type { ApiTokenClaims };

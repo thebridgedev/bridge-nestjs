@@ -25,13 +25,16 @@ module.exports = {
   globalSetup: '<rootDir>/e2e/global-setup.js',
   globalTeardown: '<rootDir>/e2e/global-teardown.js',
 
-  // auth-core ships as native ESM (`"type": "module"`). Mirror jest.config.js
-  // (unit) so Jest's CJS runner can load it without switching this project to
-  // ESM: (1) transform `.js/.mjs` too — not just `.ts` — so auth-core's emitted
-  // ESM is down-leveled; (2) whitelist the package in transformIgnorePatterns
-  // so Jest stops skipping it in node_modules; (3) strip NodeNext `.js`
-  // suffixes from auth-core's internal subpath imports. Without these, every
-  // e2e spec crashes at module-load with `SyntaxError: Unexpected token 'export'`.
+  // auth-core ships as native ESM (`"type": "module"`), and its `jose`
+  // dependency likewise; the plugin reaches both transitively. Mirror the unit
+  // config (bridge-nestjs/jest.config.js) so Jest's CJS runner can load them
+  // without switching this project to ESM, otherwise every e2e suite dies at
+  // module-load with `SyntaxError: Unexpected token 'export'`:
+  //   1. transform `.js`/`.mjs` too — the ts-jest preset only registers
+  //      .ts/.tsx — so the emitted ESM is down-levelled
+  //   2. un-ignore those packages in transformIgnorePatterns, so Jest stops
+  //      skipping them in node_modules
+  //   3. strip NodeNext `.js` suffixes from auth-core's internal subpath imports
   transform: {
     '^.+\\.[jt]sx?$': [
       'ts-jest',
@@ -41,12 +44,29 @@ module.exports = {
         isolatedModules: true,
       },
     ],
+    // Scoped to node_modules so the project's own CommonJS `.js` files (the
+    // global-setup/teardown wrappers, the plugin's built dist) are left alone —
+    // running them through ts-jest works but emits an `allowJs` warning per file.
+    'node_modules[\\\\/].+\\.m?js$': [
+      'ts-jest',
+      {
+        tsconfig: '<rootDir>/tsconfig.e2e.json',
+        isolatedModules: true,
+      },
+    ],
   },
+
+  // Bun's isolated installs place packages under
+  //   node_modules/.bun/<name>@<ver>/node_modules/<name>/…
+  // so a pattern anchored on `node_modules/@nebulr-group/…` would never match.
+  // The `[+/]` covers bun's `+` encoding of the scope separator.
   transformIgnorePatterns: [
-    'node_modules/(?!(@nebulr-group/bridge-auth-core)/)',
+    'node_modules/(?!.*(@nebulr-group[+/]bridge-auth-core|jose[@/]))',
   ],
+
   moduleNameMapper: {
-    '^@nebulr-group/bridge-auth-core/(.*)\\.js$': '@nebulr-group/bridge-auth-core/$1',
+    '^@nebulr-group/bridge-auth-core/(.*)\\.js$':
+      '@nebulr-group/bridge-auth-core/$1',
   },
 
   // E2E tests are slower than unit tests — allow up to 30s per test
