@@ -113,6 +113,15 @@ export interface BridgeConfig {
   introspectionCacheTtlMs?: number;
 
   /**
+   * @deprecated TBP-411 — API tokens are HS256-signed with a per-app secret, so
+   * they can never be verified against a JWKS; the endpoint this pointed at
+   * published the symmetric secret as an `oct` key and was itself auth-gated.
+   * Verification now goes through Bridge token introspection. Set
+   * {@link introspectionUrl} instead. This field is ignored.
+   */
+  apiTokenJwksUrl?: string;
+
+  /**
    * Override the JWKS URL for user JWT verification.
    * Useful in Docker when the container can't reach the public apiBaseUrl.
    * @default {apiBaseUrl}/auth/.well-known/jwks.json

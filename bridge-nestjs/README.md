@@ -280,9 +280,15 @@ interface BridgeConfig {
   apiBaseUrl?: string;          // default: 'https://api.thebridge.dev'
   debug?: boolean;              // default: false
 
-  // JWKS overrides — useful in Docker when the container can't reach the public apiBaseUrl
-  apiTokenJwksUrl?: string;     // default: {apiBaseUrl}/auth/account/app/.well-known/jwks.json
-  userJwksUrl?: string;         // default: {apiBaseUrl}/auth/.well-known/jwks.json
+  // Verification-endpoint overrides — useful in Docker when the container
+  // can't reach the public apiBaseUrl
+  introspectionUrl?: string;       // default: {apiBaseUrl}/account/api-token/introspect
+  introspectionCacheTtlMs?: number; // default: 0 (introspect every request)
+  userJwksUrl?: string;            // default: {apiBaseUrl}/auth/.well-known/jwks.json
+
+  // Deprecated (TBP-411): API tokens are HS256-signed with a per-app secret and
+  // can never be verified against a JWKS. Ignored — use introspectionUrl.
+  apiTokenJwksUrl?: string;
 
   // Guard configuration
   guard?: {
