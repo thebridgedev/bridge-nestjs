@@ -50,6 +50,44 @@ export interface TenantEntitlementsView {
   snapshot(): Promise<Record<string, boolean>>;
 }
 
+/**
+ * TBP-275 — per-metric usage quota snapshot, mirroring the bridge-api
+ * `GET /usage/quota/:metric` shape. For `metered` quotas the overage fields are
+ * populated so a server can show / log live cost.
+ */
+export interface QuotaSnapshot {
+  metric: string;
+  used: number;
+  limit: number;
+  remaining: number;
+  warningLevel: null | 'approaching' | 'critical';
+  policy: 'hard' | 'metered';
+  /** Per-unit price (metered only). */
+  unitAmount?: number;
+  currency?: string;
+  /** Estimated overage cost this period (metered only). */
+  overageEstimate?: number;
+  /** True once usage passed the included allotment (metered only). */
+  overcap?: boolean;
+}
+
+/**
+ * TBP-275 — usage slice on a {@link TenantScope}. `report` ingests a usage event
+ * (server-side; idempotency-keyed) and `quota` reads the live per-metric snapshot
+ * including metered overage estimate.
+ */
+export interface TenantUsageView {
+  /**
+   * Report `value` units of `metric` for this tenant. Best-effort: resolves when
+   * the POST completes and swallows transport errors (never throws into the
+   * request path). `idempotencyKey` auto-generates when omitted so accidental
+   * double-reports dedupe server-side.
+   */
+  report(metric: string, value?: number, idempotencyKey?: string): Promise<void>;
+  /** Live quota snapshot for a metric (or null when no quota is configured). */
+  quota(metric: string): Promise<QuotaSnapshot | null>;
+}
+
 export class TenantScope {
   constructor(
     private readonly userJwt: string,
@@ -97,9 +135,60 @@ export class TenantScope {
     };
   }
 
+  /** Lazy: the usage slice — `report(metric)` + `quota(metric)`. */
+  get usage(): TenantUsageView {
+    return {
+      report: (metric, value = 1, idempotencyKey?) =>
+        this._reportUsage(metric, value, idempotencyKey),
+      quota: (metric) => this._fetchQuota(metric),
+    };
+  }
+
   /** Force-refresh the cached snapshot on the next access (post-mutation). */
   invalidate(): void {
     this.cache.invalidate(`session:${this.cacheKey}`);
+  }
+
+  private async _reportUsage(
+    metric: string,
+    value: number,
+    idempotencyKey?: string,
+  ): Promise<void> {
+    if (typeof metric !== 'string' || metric.length === 0) return;
+    const url = `${this.apiBaseUrl.replace(/\/+$/, '')}/usage/ingest`;
+    const key =
+      idempotencyKey ??
+      (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${this.cacheKey}:${metric}:${value}`);
+    try {
+      await this.fetcher(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.userJwt}`,
+          'x-app-id': this.appId,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ metric, value, idempotencyKey: key }),
+      });
+    } catch {
+      // Best-effort — usage reporting must never break the request path.
+    }
+  }
+
+  private async _fetchQuota(metric: string): Promise<QuotaSnapshot | null> {
+    const url = `${this.apiBaseUrl.replace(/\/+$/, '')}/usage/quota/${encodeURIComponent(metric)}`;
+    const res = await this.fetcher(url, {
+      headers: {
+        Authorization: `Bearer ${this.userJwt}`,
+        'x-app-id': this.appId,
+      },
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new Error(`[bridge-nestjs] GET /usage/quota/${metric} failed: ${res.status}`);
+    }
+    return (await res.json()) as QuotaSnapshot | null;
   }
 
   private async _fetchSnapshot(): Promise<SessionSnapshotData> {

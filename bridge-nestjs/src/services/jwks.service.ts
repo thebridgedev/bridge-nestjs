@@ -22,7 +22,9 @@ import { JwtClaims } from '../types/user';
  * bridge-nextjs and any future backend plugin share one implementation. This
  * class only adapts NestJS DI onto it; the public surface — `verifyToken`,
  * `verifyApiToken`, `TokenVerificationError`, `ApiTokenClaims` — is unchanged,
- * so call sites and consumers need no edits.
+ * so call sites and consumers need no edits. Both symbols are the very ones
+ * auth-core exports (not subclasses), so `instanceof TokenVerificationError`
+ * holds regardless of which path threw.
  */
 @Injectable()
 export class JwksService {

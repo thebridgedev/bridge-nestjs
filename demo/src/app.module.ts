@@ -24,16 +24,21 @@ import { ForwardController } from './forward/forward.controller';
           // Public routes. A RouteRule carries a `privilege`, and 'ANONYMOUS'
           // is what the guard short-circuits on — there is no `public: true`
           // rule form (that's the `@Public()` decorator, which /health also
-          // already uses).
+          // already uses). Only ANONYMOUS/privilege/plan rules belong in
+          // central guard config.
           { path: '/health', privilege: 'ANONYMOUS' },
           { path: '/api/public/*', privilege: 'ANONYMOUS' },
+
+          // /premium/* has no dedicated controller, so there is no central rule
+          // for it; gate premium endpoints with @RequireFeatureFlag(...) on
+          // their controller.
         ],
-        // Role and feature-flag gating are decorator-driven, not rule-driven:
-        // `@RequireRole` / `@RequireFeatureFlag` on the handler. The demo
-        // controllers already declare them that way — see
-        // admin.controller.ts (@RequireRole('OWNER')) and
-        // beta.controller.ts (@RequireFeatureFlag). The `role:` / `featureFlag:`
-        // rules that used to sit here were never a supported RouteRule shape.
+        // Role gating is decorator-driven, not rule-driven: `@RequireRole` on
+        // the handler — see admin.controller.ts (@RequireRole('OWNER')). The
+        // `role:` rules that used to sit here were never a supported RouteRule
+        // shape. Feature flags can go either way: `@RequireFeatureFlag` on the
+        // handler (see beta.controller.ts) or, since TBP-472, a central rule's
+        // `featureFlag:` / `entitlement:` field.
       },
     }),
   ],

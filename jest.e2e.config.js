@@ -25,19 +25,23 @@ module.exports = {
   globalSetup: '<rootDir>/e2e/global-setup.js',
   globalTeardown: '<rootDir>/e2e/global-teardown.js',
 
-  // auth-core (and its `jose` dependency) are published as native ESM, and the
-  // plugin reaches both transitively. Jest's CJS runner needs the same three
-  // adjustments the unit config (bridge-nestjs/jest.config.js) already makes,
-  // otherwise every suite dies at module-load with
-  // `SyntaxError: Unexpected token 'export'`:
-  //   1. transform `.js`/`.mjs` too — the ts-jest preset only registers .ts/.tsx
-  //   2. un-ignore those packages in node_modules
+  // auth-core ships as native ESM (`"type": "module"`), and its `jose`
+  // dependency likewise; the plugin reaches both transitively. Mirror the unit
+  // config (bridge-nestjs/jest.config.js) so Jest's CJS runner can load them
+  // without switching this project to ESM, otherwise every e2e suite dies at
+  // module-load with `SyntaxError: Unexpected token 'export'`:
+  //   1. transform `.js`/`.mjs` too — the ts-jest preset only registers
+  //      .ts/.tsx — so the emitted ESM is down-levelled
+  //   2. un-ignore those packages in transformIgnorePatterns, so Jest stops
+  //      skipping them in node_modules
   //   3. strip NodeNext `.js` suffixes from auth-core's internal subpath imports
   transform: {
-    '^.+\\.tsx?$': [
+    '^.+\\.[jt]sx?$': [
       'ts-jest',
       {
         tsconfig: '<rootDir>/tsconfig.e2e.json',
+        useESM: false,
+        isolatedModules: true,
       },
     ],
     // Scoped to node_modules so the project's own CommonJS `.js` files (the

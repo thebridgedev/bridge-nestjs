@@ -82,7 +82,7 @@ export class BridgeConfigService {
    * without any key management on the developer's side.
    *
    * Uses the `introspectionUrl` override if configured, otherwise derived from
-   * apiBaseUrl.
+   * apiBaseUrl. Note: this lives directly under apiBaseUrl (NOT under /auth).
    */
   get introspectionUrl(): string {
     return this.config.introspectionUrl ?? `${this.apiBaseUrl}/account/api-token/introspect`;

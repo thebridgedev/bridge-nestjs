@@ -51,9 +51,9 @@ interface BridgeUser {
 }
 ```
 
-### Accessing tenant information
+### Accessing workspace information
 
-Use the `@CurrentTenant()` decorator to access tenant details:
+Use the `@CurrentTenant()` decorator to access details about the user's workspace (called a *tenant* in the API):
 
 ```typescript
 import { Controller, Get } from '@nestjs/common';
@@ -173,10 +173,10 @@ export class ItemsController {
 
 The Bridge NestJS plugin supports two authentication paths:
 
-1. **User JWT** — sent via `Authorization: Bearer <token>` header. This is the standard path for browser-based users.
-2. **API token** — sent via `x-api-key` header as a JWT. This is for server-to-server communication and programmatic access.
+1. **User JWT**: sent via the `Authorization: Bearer <token>` header. This is the standard path for browser-based users.
+2. **API token**: sent via the `x-api-key` header as a JWT. This is for server-to-server communication and programmatic access.
 
-The guard checks both headers. If an API token is present, it is verified against a separate JWKS endpoint and the claims are attached to `req.bridgeApiToken`. If only a Bearer token is present, it follows the standard user JWT path.
+The guard checks both headers. If an API token is present, it is verified by introspection: the guard POSTs the token to the Bridge, which checks both the signature and the backing record (not revoked, not expired) and returns the token's claims. Those verified claims are attached to `req.bridgeApiToken`. If only a Bearer token is present, the request follows the standard user JWT path, verified locally against Bridge's JWKS endpoint.
 
 > **Backward compatibility:** User JWTs bypass the `@RequirePrivilege()` check. This ensures existing endpoints that add `@RequirePrivilege()` for API token enforcement don't break user JWT access.
 
@@ -226,10 +226,10 @@ Use `@AcceptAuth()` to restrict which authentication type an endpoint accepts:
 ```typescript
 import { AcceptAuth } from '@nebulr-group/bridge-nestjs';
 
-// Only user JWTs accepted — API tokens get 401
+// Only user JWTs accepted; API tokens get 401
 @AcceptAuth('jwt')
 
-// Only API tokens accepted — user JWTs get 401
+// Only API tokens accepted; user JWTs get 401
 @AcceptAuth('api_token')
 
 // Both accepted (default when decorator is omitted)
@@ -302,7 +302,7 @@ export class AccountController {
 
 ## Role-Based Access Control
 
-Roles are enforced via the `@RequireRole()` decorator. Roles are **not** part of route rules — they are decorator-only.
+Roles are enforced via the `@RequireRole()` decorator. Roles are **not** part of route rules; they are decorator-only.
 
 ### Controller-level and route-level usage
 

@@ -54,7 +54,6 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
           { path: '/users/*', privilege: 'USER_READ' },
 
           // Restrict by subscription plan
-          { path: '/premium/*', privilege: 'AUTHENTICATED', plans: ['PREMIUM', 'ENTERPRISE'] },
         ],
       },
     }),
@@ -65,7 +64,7 @@ export class AppModule {}
 
 All routes are now protected by default, with the exceptions you defined.
 
-> **Note:** Role-based access (`@RequireRole()`) and feature flags (`@RequireFeatureFlag()`) are applied via decorators on controllers/routes, not in route rules. See the [examples documentation](../examples/examples.md) for details.
+> **Note:** Role-based access (`@RequireRole()`) and feature flags (`@RequireFlag()` from `@nebulr-group/bridge-nestjs/flags`) are applied via decorators on controllers/routes, not in route rules. See the [feature flags documentation](../feature-flags/feature-flags.md) for details.
 
 ## Accessing the authenticated user
 
@@ -146,7 +145,7 @@ export class ApiUsersController {
     // ...
   }
 
-  // Only accept API tokens — user JWTs get 401
+  // Only accept API tokens; user JWTs get 401
   @Get('external')
   @AcceptAuth('api_token')
   @RequirePrivilege('USER_READ')

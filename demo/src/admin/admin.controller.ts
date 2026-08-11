@@ -2,12 +2,15 @@ import { Controller, Get } from '@nestjs/common';
 import { RequireRole, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
 
 /**
- * Admin controller - all routes require ADMIN role by config rule
+ * Admin controller - all routes require ADMIN role.
+ * Role gating is applied at the controller level via @RequireRole('ADMIN');
+ * the global BridgeAuthGuard (configured in app.module.ts) enforces it.
  */
 @Controller('admin')
+@RequireRole('ADMIN')
 export class AdminController {
   /**
-   * List users - requires ADMIN role (from config rule)
+   * List users - requires ADMIN role (from controller-level @RequireRole)
    */
   @Get('users')
   listUsers(@CurrentUser() user: BridgeUser) {
@@ -41,7 +44,7 @@ export class AdminController {
   }
 
   /**
-   * Get dashboard - uses default ADMIN role from config
+   * Get dashboard - uses the controller-level ADMIN role
    */
   @Get('dashboard')
   getDashboard(@CurrentUser() user: BridgeUser) {

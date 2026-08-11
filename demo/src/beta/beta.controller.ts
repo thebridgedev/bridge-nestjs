@@ -9,14 +9,17 @@ import { Request } from 'express';
 import { Req } from '@nestjs/common';
 
 /**
- * Beta features controller - routes gated by feature flags
+ * Beta features controller - routes gated by feature flags.
+ * The controller-level @RequireFeatureFlag('beta-access') applies to all routes;
+ * individual routes override it with their own @RequireFeatureFlag(...).
  */
 @Controller('beta')
+@RequireFeatureFlag('beta-access')
 export class BetaController {
   constructor(private readonly featureFlagService: FeatureFlagService) {}
 
   /**
-   * Beta feature - requires 'beta-access' flag (from config rule)
+   * Beta feature - requires 'beta-access' flag (from controller-level decorator)
    */
   @Get('feature')
   getBetaFeature(@CurrentUser() user: BridgeUser) {
@@ -31,10 +34,11 @@ export class BetaController {
   }
 
   /**
-   * Premium reports - requires both 'premium-tier' and 'active-subscription' flags
-   * This is configured via the route rule in app.module.ts
+   * Premium reports - requires both 'premium-tier' and 'active-subscription' flags.
+   * Overrides the controller-level 'beta-access' requirement.
    */
   @Get('premium/reports')
+  @RequireFeatureFlag({ all: ['premium-tier', 'active-subscription'] })
   getPremiumReports(@CurrentUser() user: BridgeUser) {
     return {
       message: 'Premium reports',

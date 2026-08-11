@@ -33,8 +33,26 @@ export interface RouteRule {
   graphqlOperation?: string;
   /** Required privilege level for this route */
   privilege: RoutePrivilege;
-  /** Optional plan restriction — tenant plan must be in this list */
+  /**
+   * Optional plan restriction (TBP-472). The tenant's subscription plan slug
+   * must be in this list, otherwise the request is denied with 402 Payment
+   * Required (`reason: 'plan_required'`). Fail-closed: if the plan cannot be
+   * resolved the request is denied.
+   */
   plans?: string[];
+  /**
+   * Optional entitlement restriction (TBP-472). Each key is checked via
+   * `bridge.fromJwt(jwt).entitlements.can(key)`; the tenant must have ALL
+   * listed entitlements, otherwise 402 Payment Required
+   * (`reason: 'entitlement_missing'`). Fail-closed on resolution error.
+   */
+  entitlement?: string | string[];
+  /**
+   * Optional feature-flag restriction (TBP-472). Evaluated for the request's
+   * user JWT via the same path as `@RequireFeatureFlag`; a disabled flag
+   * denies with 403 Forbidden. Fail-closed on resolution error.
+   */
+  featureFlag?: FeatureFlagRequirement;
 }
 
 /**
@@ -77,16 +95,19 @@ export interface BridgeConfig {
   debug?: boolean;
 
   /**
-   * Override the token-introspection URL used to verify API tokens.
-   * Useful in Docker when the container can't reach the public apiBaseUrl.
+   * Override the token-introspection URL for API token verification.
+   * API tokens are signed with the per-app HS256 secret (which this app never
+   * holds), so they are verified by POSTing them to the Bridge rather than
+   * locally. Override this in Docker when the container can't reach the public
+   * apiBaseUrl.
    * @default {apiBaseUrl}/account/api-token/introspect
    */
   introspectionUrl?: string;
 
   /**
-   * How long a successful API-token introspection is cached, keyed by token.
-   * Trades revocation latency for fewer network calls; `0` introspects on every
-   * request, giving instant revocation.
+   * How long (ms) a successful API-token introspection is cached, keyed by
+   * token. Trades revocation latency for fewer network calls. `0` disables
+   * caching → every request introspects (instant revocation).
    * @default 0
    */
   introspectionCacheTtlMs?: number;

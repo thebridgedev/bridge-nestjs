@@ -5,8 +5,9 @@
  *   - A regular USER cannot access /admin/* routes → 403
  *   - An ADMIN user can access /admin/* routes → 200
  *
- * The demo AppModule configures:
- *   { path: '/admin/*', role: 'ADMIN' }
+ * The demo AdminController gates all /admin/* routes with:
+ *   @RequireRole('ADMIN')
+ * enforced by the global BridgeAuthGuard configured in the demo AppModule.
  *
  * Test accounts created by TestDataClient are typically assigned the OWNER role
  * for the first user (app owner) and USER role for subsequent accounts.
@@ -74,17 +75,21 @@ describe('RBAC — /admin/settings requires OWNER role (E2E)', () => {
   let request: supertest.Agent;
   let testDataClient: TestDataClient;
   let authClient: AuthClient;
-  let userAccount: PlaywrightTestAccount;
-  let userToken: string;
+  let ownerAccount: PlaywrightTestAccount;
+  let ownerToken: string;
 
   beforeAll(async () => {
     const config = getEnvironmentConfig();
     testDataClient = new TestDataClient(config);
     authClient = new AuthClient(config.authBaseUrl, config.appId);
 
-    userAccount = await testDataClient.createTestAccount();
-    userToken = (
-      await authClient.getToken(userAccount.email, userAccount.password)
+    // A freshly-created account is the OWNER of its own tenant — so this token
+    // carries the OWNER role. (The wrong-role *denial* path is already covered
+    // by the ADMIN suite above: an OWNER token is rejected from ADMIN-gated
+    // routes with 403.)
+    ownerAccount = await testDataClient.createTestAccount();
+    ownerToken = (
+      await authClient.getToken(ownerAccount.email, ownerAccount.password)
     ).accessToken;
 
     app = await createTestApp();
@@ -93,15 +98,19 @@ describe('RBAC — /admin/settings requires OWNER role (E2E)', () => {
 
   afterAll(async () => {
     await app.close();
-    await testDataClient.removeTestAccount(userAccount.email).catch(() => {});
+    await testDataClient.removeTestAccount(ownerAccount.email).catch(() => {});
   });
 
-  it('returns 403 when a non-owner user accesses /admin/settings', async () => {
+  it('returns 401 for unauthenticated requests to /admin/settings', async () => {
+    const res = await request.get('/admin/settings');
+    expect(res.status).toBe(401);
+  });
+
+  it('allows an OWNER to access /admin/settings (@RequireRole OWNER satisfied)', async () => {
     const res = await request
       .get('/admin/settings')
-      .set('Authorization', `Bearer ${userToken}`);
-    // The @RequireRole('OWNER') decorator on the settings endpoint
-    // requires OWNER, which a regular test user does not have.
-    expect(res.status).toBe(403);
+      .set('Authorization', `Bearer ${ownerToken}`);
+    // The account owns its tenant, so the OWNER role gate is satisfied.
+    expect(res.status).toBe(200);
   });
 });

@@ -2,7 +2,7 @@
  * Programmatic SDK-mode auth client for the Bridge auth server.
  *
  * Implements the same two-call flow the Bridge SDK (auth-core `DirectAuth`)
- * uses, without a browser:
+ * uses, without a browser — stateless, no cookies, no redirects:
  *   1. POST /authenticate  { username, password, mode: 'sdk', appId }
  *        → { session, tenantUsers: [{ id, … }] }
  *   2. POST /token/direct  { session, tenantUserId, appId, scope, mode: 'sdk' }
@@ -16,12 +16,14 @@
  * suite died in `beforeAll` on that call.
  *
  * SDK mode is guarded by `SdkOriginGuard`: the request must carry an `Origin`
- * header that matches the app's registered `allowedOrigins`. The E2E test app
- * is created by `e2e/pre-setup.ts` with `appUrl: http://localhost:3099`, which
- * is why that is the default origin here.
+ * header that matches the app's registered `allowedOrigins`. That value comes
+ * from `TEST_APP_URL` (see config/test-app.ts) — the same constant
+ * `e2e/pre-setup.ts` registers the app with (`appUrl`), so the two cannot drift.
  *
  * Used exclusively in E2E tests to obtain real JWT tokens for authenticated requests.
  */
+
+import { TEST_APP_URL } from '../config/test-app';
 
 export interface TokenSet {
   accessToken: string;
@@ -46,25 +48,28 @@ export class AuthClient {
     private readonly appId: string,
     /**
      * Origin presented to `SdkOriginGuard`. Must be one of the app's
-     * `allowedOrigins` — see `e2e/pre-setup.ts` (`appUrl`).
+     * `allowedOrigins` — which the Bridge API derives from the `appUrl`
+     * `e2e/pre-setup.ts` registered, i.e. `TEST_APP_URL`.
      */
-    private readonly origin: string = process.env.E2E_SDK_ORIGIN ||
-      'http://localhost:3099',
+    private readonly origin: string = process.env.E2E_SDK_ORIGIN || TEST_APP_URL,
   ) {}
 
   /**
-   * Obtain an access token for the given credentials.
+   * Obtain an access token for the given credentials via the SDK direct flow.
    *
    * @throws Error if either step of the SDK auth flow fails.
    */
   async getToken(email: string, password: string): Promise<TokenSet> {
+    const sdkHeaders = {
+      'Content-Type': 'application/json',
+      // Must match one of the test app's allowed origins (SdkOriginGuard).
+      Origin: this.origin,
+    };
+
     // ── Step 1: Authenticate with credentials (SDK mode) ──────────────────
     const authResp = await fetch(`${this.authBaseUrl}/authenticate`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Origin: this.origin,
-      },
+      headers: sdkHeaders,
       body: JSON.stringify({
         username: email,
         password,
@@ -74,9 +79,8 @@ export class AuthClient {
     });
 
     if (!authResp.ok) {
-      const body = await authResp.text();
       throw new Error(
-        `[AuthClient] Authentication failed (${authResp.status}): ${body}`,
+        `[AuthClient] authenticate failed (${authResp.status}): ${await authResp.text()}`,
       );
     }
 
@@ -99,10 +103,7 @@ export class AuthClient {
     // ── Step 2: Select the tenant user → tokens ───────────────────────────
     const tokenResp = await fetch(`${this.authBaseUrl}/token/direct`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Origin: this.origin,
-      },
+      headers: sdkHeaders,
       body: JSON.stringify({
         session: authBody.session,
         tenantUserId: tenantUser.id,
@@ -113,9 +114,8 @@ export class AuthClient {
     });
 
     if (!tokenResp.ok) {
-      const body = await tokenResp.text();
       throw new Error(
-        `[AuthClient] Token exchange failed (${tokenResp.status}): ${body}`,
+        `[AuthClient] token/direct failed (${tokenResp.status}): ${await tokenResp.text()}`,
       );
     }
 
