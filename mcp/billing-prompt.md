@@ -2,15 +2,52 @@
 
 You are adding **server-side billing enforcement** to a NestJS application that uses The Bridge.
 
-> **What "billing" means on the backend.** A backend plugin **reads** subscription state and **enforces** entitlements — nothing more. There is no checkout, no paywall, no plan-selector, and no Stripe redirect here. Purchasing lives entirely in the **frontend** Bridge plugin (the plan selector + Stripe Checkout) and in **bridge-api** (Stripe webhooks that sync plan/subscription state). This guide covers two things only: (1) reading the current tenant's subscription, and (2) gating server behavior on the tenant's plan and entitlements. Do not add purchasing, checkout URLs, or Stripe client code to the backend.
+> **What "billing" means on the backend.** A backend plugin **reads** subscription state and **enforces** entitlements — nothing more. There is no checkout, no paywall, no plan-selector, and no Stripe redirect here. Purchasing lives entirely in the **frontend** Bridge plugin (the plan selector + Stripe Checkout) and in **bridge-api** (Stripe webhooks that sync plan/subscription state). This guide covers two things only: (1) reading the current tenant's subscription, and (2) gating server behavior on the tenant's plan and entitlements. Do not add purchasing, checkout URLs, or Stripe client code to the backend. It also documents how to **configure** the plans, prices and quotas you gate on — that is platform configuration done over MCP or the CLI, not code you write into the app.
 
 Team/workspace management is likewise out of scope — the backend surface is read-only and exposes no team CRUD. Member management is driven from the frontend plugin and bridge-api.
 
 ## Prerequisites
 
 1. `@nebulr-group/bridge-nestjs` installed and `BridgeModule.forRoot()` registered (see `integration-prompt.md`).
-2. Plans and Stripe are already configured on the Bridge app (done in the frontend/master billing flow). Confirm with `bridge plan list` — at least one plan should exist.
+2. Plans and Stripe are already configured on the Bridge app (done in the frontend/master billing flow). Confirm with `list_plans` (MCP) or `bridge plan list` (CLI) — at least one plan should exist.
 3. Routes are protected — entitlement gating runs on a verified user JWT, so the caller must be authenticated.
+
+> **Stripe connection is a human step — there is no MCP tool for it.** If Stripe isn't connected on the app, nothing you configure will bill. Connecting it means handing over live secrets, so it happens in the dashboard, or on the CLI with `bridge stripe connect --secret-key <sk_…> --publishable-key <pk_…>`. Check with `bridge stripe status`. Don't burn turns looking for an MCP tool; ask the user to do it.
+
+## Configuring plans — MCP, CLI, or dashboard
+
+Plans, prices and quotas are **platform configuration**, not application code. Bridge exposes them over **two channels an agent can drive**, both hitting the same management API, so the result is identical:
+
+| Operation | MCP tool | CLI |
+|---|---|---|
+| List plans (with prices + quotas) | `list_plans` | `bridge plan list` |
+| Inspect one plan | — read it out of `list_plans` | `bridge plan get <key>` |
+| Create a plan | `create_plan` | `bridge plan create --key <k> --name <n>` |
+| Rename / re-describe a plan | `update_plan` | `bridge plan update --key <k> --name <n>` |
+| Add or replace a recurring price | `set_plan_price` | `bridge plan price set <key> --amount <n> --interval <i>` |
+| Remove a price | `remove_plan_price` | `bridge plan price rm <key> --interval <i>` |
+| Add or replace a usage quota | `set_plan_quota` | `bridge plan quota set <key> --metric <m> --limit <n> --policy <p>` |
+| Remove a quota | `remove_plan_quota` | `bridge plan quota rm <key> --metric <m>` |
+| List a plan's quotas | — in `list_plans` output | `bridge plan quota list <key>` |
+| **Connect Stripe** | **none — human step** | `bridge stripe connect` |
+
+**Use whichever you actually have.** If the user asked for a specific one, use that one — no reason to argue, both reach the same API. If you have both and the user expressed no preference, either is correct; pick one and stay on it for the whole task.
+
+The **dashboard is a last resort**, not a third equal option. Only walk the user through the UI when neither MCP nor CLI is available *and* they don't want to install one — or for Stripe, which has no MCP path at all.
+
+### The common shape: free hard cap + premium metered overage
+
+Two `set_plan_quota` calls on the same metric, differing only in `policy`:
+
+```jsonc
+// Free — requests past the cap are refused.
+{ "key": "free",    "metric": "api_calls", "limit": 1000,  "policy": "hard" }
+
+// Premium — 50k included, everything beyond it billed per unit through Stripe.
+{ "key": "premium", "metric": "api_calls", "limit": 50000, "policy": "metered", "priceAmount": 0.002 }
+```
+
+`limit` is the number of included units — a hard ceiling under `policy: "hard"`, and the free allowance before per-unit billing kicks in under `"metered"` (`limit: 0` bills from the first unit). `priceAmount` must be `> 0` for `metered` and must **not** be set for `hard`. `priceCurrency` is optional: it defaults to the plan's price currency when that is unambiguous, so add a price to the plan (`set_plan_price`) before adding a metered quota. Same thing on the CLI: `bridge plan quota set premium --metric api_calls --limit 50000 --policy metered --price-amount 0.002`.
 
 ## How backend enforcement works
 
@@ -108,9 +145,10 @@ const q = await tenant.usage.quota('api_calls');
 ```
 
 Reporting usage is a backend responsibility (it must be trusted); the per-unit
-**price** is set by the operator via `bridge plan quota set --policy metered
---price-amount <n>`, and bridge-api meters + bills it through Stripe. Do not add
-Stripe code here.
+**price** is configuration, set via `set_plan_quota` with `policy: "metered"` and
+`priceAmount` (MCP) or `bridge plan quota set <key> --policy metered
+--price-amount <n>` (CLI) — see "Configuring plans" above. bridge-api meters and
+bills it through Stripe. Do not add Stripe code here.
 
 Example — surface plan and lifecycle to the client:
 
@@ -185,7 +223,8 @@ Normally you don't call this — the 30s TTL keeps state fresh. Backend code sho
 
 ## Checklist
 
-- [ ] `bridge plan list` returns at least one plan (plans configured via the frontend/master billing flow)
+- [ ] `list_plans` / `bridge plan list` returns at least one plan (plans configured via the frontend/master billing flow)
+- [ ] Stripe is connected on the app (`bridge stripe status`) — no MCP tool exists for connecting it; that's a human step
 - [ ] No checkout / paywall / Stripe client code added to the backend — purchasing stays in the frontend + bridge-api
 - [ ] Tier-gated paths use `plans: [...]` on the route rule (with a `privilege`)
 - [ ] Capability gates use `BridgeService.fromJwt(jwt).entitlements.can(key)` and fail closed
