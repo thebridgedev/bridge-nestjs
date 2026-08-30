@@ -12,7 +12,14 @@ Team/workspace management is likewise out of scope — the backend surface is re
 2. Plans and Stripe are already configured on the Bridge app (done in the frontend/master billing flow). Confirm with `list_plans` (MCP) or `bridge plan list` (CLI) — at least one plan should exist.
 3. Routes are protected — entitlement gating runs on a verified user JWT, so the caller must be authenticated.
 
-> **Stripe connection is a human step — there is no MCP tool for it.** If Stripe isn't connected on the app, nothing you configure will bill. Connecting it means handing over live secrets, so it happens in the dashboard, or on the CLI with `bridge stripe connect --secret-key <sk_…> --publishable-key <pk_…>`. Check with `bridge stripe status`. Don't burn turns looking for an MCP tool; ask the user to do it.
+> **Check Stripe is connected before configuring anything.** If it isn't, nothing you configure will bill.
+>
+> | Channel | Read status | Connect |
+> |---|---|---|
+> | MCP | `get_stripe_status` | `connect_stripe`, or `setup_payments` for the whole flow |
+> | CLI | `bridge stripe status` | `bridge stripe connect --secret-key <sk_…> --publishable-key <pk_…>` |
+>
+> Connecting means handing over a live Stripe secret key. Ask the user for it — never invent one, and never read it out of a file you happened to find. If they would rather not paste a secret into a chat, the dashboard is the third option.
 
 ## Configuring plans — MCP, CLI, or dashboard
 
