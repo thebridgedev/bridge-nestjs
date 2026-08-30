@@ -150,6 +150,34 @@ Reporting usage is a backend responsibility (it must be trusted); the per-unit
 --price-amount <n>` (CLI) — see "Configuring plans" above. bridge-api meters and
 bills it through Stripe. Do not add Stripe code here.
 
+#### Do not build a `/quota` endpoint for your frontend
+
+Read this before you expose quota to a client. The split is:
+
+| | |
+|---|---|
+| **Your backend** | Enforces the cap and reports usage. `usage.quota()` to decide, `usage.report()` to meter. |
+| **The frontend** | Reads quota **directly from Bridge** — `useBridge().quota(metric)` in bridge-svelte, or the ready-made `<BridgeQuotaBanner metric="…" />`. |
+
+So your API does **not** need a route that relays a `QuotaSnapshot` to your own
+UI, and your frontend should not hand-copy the `QuotaSnapshot` shape into a local
+type — the client SDK already returns it typed. A `GET /quota` proxy plus a
+hand-written mirror of that interface is a common wrong turn, and it silently
+drifts from the real shape the first time a field is added.
+
+Enforcement, though, genuinely is yours alone: a client-side check is display,
+not a cap. Anyone can call your API directly. Disable the button for UX **and**
+refuse the write on the server.
+
+#### `hard` and `metered` behave oppositely
+
+`hard` blocks at the limit. `metered` **never** blocks — units above `limit`
+bill per unit, so refusing the action on a metered plan means refusing money the
+customer already agreed to spend. Branch on `policy`, never on `remaining` alone.
+
+When you meter, pass a stable **idempotency key** as the third argument
+(`usage.report(metric, 1, entityId)`) so a retried request cannot double-bill.
+
 Example — surface plan and lifecycle to the client:
 
 ```ts
