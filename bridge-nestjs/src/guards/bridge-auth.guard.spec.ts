@@ -330,6 +330,64 @@ describe('BridgeAuthGuard', () => {
       expect(bridgeService.fromJwt).toHaveBeenCalledWith('token');
     });
 
+    // TBP-614 — reported by a consuming app reading the source and asking us
+    // to confirm or correct it. The reading was correct: a workspace with no
+    // canonical Billing 2.0 subscription resolves `planSlug` to '' and was
+    // denied with `plan_required`, indistinguishable from a genuine upsell.
+    // For an app whose customers predate the Billing 2.0 rollout that is a
+    // 402 for the entire user base, reported as "nobody has bought this".
+    it('denies with plan_unresolved, not plan_required, when the workspace has no canonical subscription', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/reports/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['pro', 'enterprise'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      // No canonical subscription — what a pre-Billing-2.0 workspace returns.
+      tenantScope.subscription = Promise.resolve(undefined);
+
+      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        response: { reason: 'plan_unresolved' },
+      });
+    });
+
+    it('still denies — the distinction is diagnostic, not a loosening', async () => {
+      // The reason changed; the fail-closed behaviour did not. Worth pinning
+      // separately so a future edit cannot turn a clearer message into an
+      // accidental bypass.
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/reports/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['pro'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.subscription = Promise.resolve(undefined);
+
+      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toThrow();
+    });
+
+    it('a resolved-but-disallowed plan still reports plan_required', async () => {
+      // The other half of the split: this case must NOT drift to
+      // plan_unresolved, or the new reason becomes meaningless.
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/reports/*',
+        privilege: 'AUTHENTICATED',
+        plans: ['enterprise'],
+      });
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      tenantScope.subscription = Promise.resolve({ plan: { slug: 'free', name: 'Free' } });
+
+      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        response: { reason: 'plan_required' },
+      });
+    });
+
     it('denies with 402 plan_required when tenant plan is not allowed', async () => {
       reflector.getAllAndOverride.mockReturnValue(undefined);
       configService.findMatchingRule.mockReturnValue({

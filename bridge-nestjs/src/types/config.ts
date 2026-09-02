@@ -38,6 +38,20 @@ export interface RouteRule {
    * must be in this list, otherwise the request is denied with 402 Payment
    * Required (`reason: 'plan_required'`). Fail-closed: if the plan cannot be
    * resolved the request is denied.
+   *
+   * ⚠ This gates on the **canonical Billing 2.0 subscription**, resolved via
+   * `bridge.fromJwt(jwt).subscription.plan.slug`. That is a different system
+   * from the per-app `tenant.plan` and from the JWT `plan` claim, and its
+   * slugs are global rather than app-scoped.
+   *
+   * A workspace with no canonical subscription — for example one created
+   * before the Billing 2.0 rollout — resolves no slug and is denied with 402
+   * `reason: 'plan_unresolved'`, whatever plan it is actually on. If your app
+   * is not on Billing 2.0, `plans:` will reject your entire customer base.
+   *
+   * For per-app plans, gate on `featureFlag` with a `tenant.plan` targeting
+   * rule instead. `privilege`, `featureFlag`, `plans` and `entitlement` sit
+   * side by side here and look interchangeable; they are not (TBP-614).
    */
   plans?: string[];
   /**
@@ -45,6 +59,10 @@ export interface RouteRule {
    * `bridge.fromJwt(jwt).entitlements.can(key)`; the tenant must have ALL
    * listed entitlements, otherwise 402 Payment Required
    * (`reason: 'entitlement_missing'`). Fail-closed on resolution error.
+   *
+   * ⚠ Same caveat as `plans` above: entitlements come from the canonical
+   * Billing 2.0 snapshot, so a workspace without one is denied regardless of
+   * what it is entitled to in your app's own model (TBP-614).
    */
   entitlement?: string | string[];
   /**

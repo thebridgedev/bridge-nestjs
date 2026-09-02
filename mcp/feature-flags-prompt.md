@@ -33,7 +33,7 @@ You do **not** need `BridgeModule.forRoot(...)` or Bridge Auth for flags. The fl
 
 If the package isn't installed or you can't find an app id, run `bridge guide nestjs` first.
 
-> **Import path.** Import flags from `@nebulr-group/bridge-nestjs/dist/flags`. The barrel intends to be reachable as `.../flags`, but the shipped `package.json` has no `exports` map and only publishes `dist/`, so the short path does not resolve today — `require.resolve('@nebulr-group/bridge-nestjs/flags')` throws `MODULE_NOT_FOUND`. Use `/dist/flags` until an `exports` map ships.
+> **Import path.** Import flags from `@nebulr-group/bridge-nestjs/flags` (requires >= 0.6.0). Earlier versions shipped no `exports` map, so that specifier threw `MODULE_NOT_FOUND` and this guide told you to reach into `@nebulr-group/bridge-nestjs/dist/flags` instead. Do not use that path in new code — it hard-codes the build layout into your imports and is deprecated (TBP-613).
 
 ## Step 1 — Activate the flags layer
 
@@ -50,7 +50,7 @@ import {
   BridgeFlagsService,
   BridgeContextInterceptor,
   type CachedFlag,
-} from '@nebulr-group/bridge-nestjs/dist/flags';
+} from '@nebulr-group/bridge-nestjs/flags';
 
 @Module({
   imports: [
@@ -92,7 +92,7 @@ Create a controller gated on a flag. `@RequireFlag` is inert on its own — the 
 ```ts
 // src/flags-demo/flags-demo.controller.ts
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { RequireFlag, BridgeFlagGuard, Flag } from '@nebulr-group/bridge-nestjs/dist/flags';
+import { RequireFlag, BridgeFlagGuard, Flag } from '@nebulr-group/bridge-nestjs/flags';
 
 @Controller('flags-demo')
 @UseGuards(BridgeFlagGuard)
@@ -323,7 +323,7 @@ Also not supported: there is no `refresh()` on `BridgeFlagsService`, and no auto
 
 ## Troubleshooting
 
-- **`Cannot find module '@nebulr-group/bridge-nestjs/flags'`** — use `@nebulr-group/bridge-nestjs/dist/flags`. See the note under Prerequisites.
+- **`Cannot find module '@nebulr-group/bridge-nestjs/flags'`** — you are on bridge-nestjs < 0.6.0, which shipped no `exports` map. Upgrade. Do not work around it with `/dist/flags`; that path is deprecated (TBP-613).
 - **Every flag returns its default, forever.** You didn't hydrate. Confirm the `flags-cache` fetch in `onModuleInit` returns a non-empty array, and that `apiBaseUrl` / `apiKey` (app id) are the ones for the workspace holding the flag.
 - **`@RequireFlag` has no effect.** The decorator is only metadata. Add `@UseGuards(BridgeFlagGuard)` to the controller (or register it globally).
 - **`@Flag(...)` always returns the default.** It reads `req.bridgeFlags`, which is set by `BridgeContextInterceptor` or by `BridgeFlagGuard`. On a route with neither, there is nothing to read. Register the interceptor globally.

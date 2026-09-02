@@ -1,11 +1,29 @@
 {
   "name": "@nebulr-group/bridge-nestjs",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Bridge NestJS plugin for authentication, role-based access, and feature flags",
   "author": "Nebulr Group",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./flags": {
+      "types": "./dist/flags/index.d.ts",
+      "default": "./dist/flags/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "flags": [
+        "dist/flags/index.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist",
     "README.md",

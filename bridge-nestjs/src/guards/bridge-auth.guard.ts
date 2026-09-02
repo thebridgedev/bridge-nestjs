@@ -66,7 +66,22 @@ const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = 
  */
 interface PaymentRequiredBody {
   error: 'Payment required';
-  reason: 'plan_required' | 'entitlement_missing' | 'billing_locked';
+  reason:
+    | 'plan_required'
+    | 'entitlement_missing'
+    | 'billing_locked'
+    /**
+     * TBP-614 — the workspace has NO canonical Billing 2.0 subscription at
+     * all, so no plan slug could be resolved. Distinct from `plan_required`,
+     * which means a plan WAS resolved and is not in the allow-list.
+     *
+     * Collapsing the two is what made this hard to diagnose: a consumer
+     * gating on `plans:` for a customer base predating the Billing 2.0
+     * rollout got 402 `plan_required` for every single user, which reads as
+     * "nobody has bought this" rather than "this app is not on the mechanism
+     * you are gating against".
+     */
+    | 'plan_unresolved';
   requiredPlan?: string;
   requiredEntitlement?: string;
 }
@@ -486,7 +501,31 @@ export class BridgeAuthGuard implements CanActivate {
           reason: 'billing_locked',
         });
       }
-      if (!planSlug || !rule.plans!.includes(planSlug)) {
+      // TBP-614 — no slug at all means the workspace has no canonical
+      // Billing 2.0 subscription, NOT that it is on the wrong plan. Both used
+      // to answer `plan_required`, which is indistinguishable from a genuine
+      // upsell and sends the reader looking for a billing problem that does
+      // not exist.
+      //
+      // `plans` resolves through `bridge.fromJwt(token).subscription`, i.e.
+      // the canonical Billing 2.0 subscription — a different system from the
+      // per-app `tenant.plan` and from the JWT `plan` claim. A workspace
+      // created before that rollout has no subscription, so it fails here
+      // regardless of which plan it is actually on. Still fail-closed; only
+      // the reported reason changes.
+      if (!planSlug) {
+        this.configService.log(
+          'Route plan check failed — no canonical subscription for this workspace, so no plan could be resolved. `plans:` gates on Billing 2.0; for per-app plans gate on a feature flag with a `tenant.plan` rule instead.',
+          { required: rule.plans },
+        );
+        throw new PaymentRequiredException({
+          error: 'Payment required',
+          reason: 'plan_unresolved',
+          requiredPlan: rule.plans!.join(', '),
+        });
+      }
+
+      if (!rule.plans!.includes(planSlug)) {
         this.configService.log('Route plan check failed', {
           required: rule.plans,
           actual: planSlug,
