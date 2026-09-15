@@ -37,24 +37,28 @@ so it's safe to call directly in a hot request path.
 
 ## It stays up through outages
 
-When the live channel drops, flags **freeze on their last-known values** and
-refetch on reconnect, so your service keeps working through Bridge outages. A
-flag check never throws and never blocks a request; the worst case is a stale
-value or, for an unconfigured flag, your default.
+The module loads your flag rules when your service starts (waiting at most
+5 s before serving anyway). When the live channel drops, flags **keep their
+last-known values**, refresh every 30 s until it is back, and reload in full on
+reconnect, so your service keeps working through Bridge outages. A flag check
+never throws and never blocks a request; the worst case is a stale value or,
+for an unconfigured flag, your default.
 
 ## Runtime modes
 
 `BridgeFlagsModule.forRoot` takes a `runtimeMode`:
 
-- **`'channel'` (default)**: a long-running NestJS service holds a live
-  WebSocket connection to Bridge and receives rule changes as they happen.
-  This is what you want for a normal always-on API.
+- **`'channel'` (default)**: a long-running NestJS service subscribes to your
+  app's live channel, authenticating with its API key, and receives rule
+  changes as they happen. This is what you want for a normal always-on API.
+  The SDK connects only when the Bridge deployment says it admits server SDKs
+  (`GET /realtime/config`); until then, and whenever the socket is down, the
+  rules refresh every `pullCache.ttlMs` (default 30 s) instead.
 - **`'pull'`**: for ephemeral runtimes that can't hold a socket (cron jobs,
   serverless functions, webhook handlers, CLI scripts). The RealtimeClient is
-  skipped entirely; reads still evaluate locally, but the rule set refreshes
-  by polling a TTL-bounded REST cache (`BridgePullCache`, default TTL 30 s)
-  instead of receiving push updates. Inject the cache via
-  `@Inject(BRIDGE_PULL_CACHE)`.
+  skipped entirely; reads still evaluate locally, and the rule set refreshes
+  at most every `pullCache.ttlMs` (default 30 s), triggered by reads, instead
+  of receiving push updates.
 
 ```typescript
 BridgeFlagsModule.forRoot({
