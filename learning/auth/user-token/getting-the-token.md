@@ -96,16 +96,19 @@ export class ItemsController {
 `@CurrentTenant()` only gives you what's baked into the JWT (id, name, locale, logo, onboarded). For subscription plan, entitlements, or branding of the user's workspace (called a *tenant* in the API), use the injectable `BridgeService`, which fetches (and short-TTL-caches) a fuller snapshot for the token's tenant:
 
 ```typescript
-import { Controller, Get, Headers } from '@nestjs/common';
-import { BridgeService } from '@nebulr-group/bridge-nestjs';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import type { Request } from 'express';
+import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
 
 @Controller('billing')
+@UseGuards(BridgeAuthGuard)
 export class BillingController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('plan')
-  async getPlan(@Headers('authorization') auth: string) {
-    const tenant = this.bridge.fromJwt(auth.replace('Bearer ', ''));
+  async getPlan(@Req() req: Request) {
+    // Reuses the token the guard just verified; never decode the raw header yourself.
+    const tenant = this.bridge.fromRequest(req);
     return tenant.subscription;
   }
 }

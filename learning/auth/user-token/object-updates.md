@@ -19,10 +19,10 @@ If a role/privilege change needs to take effect immediately rather than on next 
 
 ## The one thing that *is* pulled fresh: `BridgeService`
 
-Workspace-level data that isn't part of the JWT at all (subscription plan, entitlements, branding) goes through a different path: `BridgeService.fromJwt(jwt)` returns a `TenantScope` that fetches (and caches) a session snapshot via `GET /session/init`, independent of what's encoded in the JWT itself.
+Workspace-level data that isn't part of the JWT at all (subscription plan, entitlements, branding) goes through a different path: `BridgeService.fromRequest(req)` (on a route behind `BridgeAuthGuard`) returns a `TenantScope` that fetches (and caches) a session snapshot via `GET /session/init`, independent of what's encoded in the JWT itself.
 
 ```typescript
-const tenant = this.bridge.fromJwt(userJwt);
+const tenant = this.bridge.fromRequest(req);
 const canExport = await tenant.entitlements.can('export');
 ```
 
@@ -33,5 +33,5 @@ Don't treat this snapshot as instantaneous either, though: a 30-second-old entit
 ## Practical takeaway
 
 - `@CurrentUser()` / `@CurrentTenant()` (JWT-derived): accurate as of *token issuance*, not as of *this request*.
-- `BridgeService.fromJwt(jwt)` snapshot slices: accurate as of the last cache refresh (at most 30 seconds old), refetched independently of the JWT.
+- `BridgeService.fromRequest(req)` snapshot slices: accurate as of the last cache refresh (at most 30 seconds old), refetched independently of the JWT.
 - Neither is push-live the way a frontend reactive store is. If your app needs to react the instant something changes server-side, that reaction has to live on the frontend (or via Bridge webhooks; see [Multi-tenancy](/auth/multi-tenancy/multi-tenancy/)), not inside this guard.

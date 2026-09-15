@@ -16,6 +16,7 @@ import { BridgePullCache } from '@nebulr-group/bridge-auth-core';
 import { BridgeService } from './bridge.service';
 import { TenantScope, type SessionSnapshotData } from './tenant-scope';
 import { BRIDGE_OPTIONS, type BridgeModuleOptions } from './bridge.tokens';
+import type { JwksService } from '../services/jwks.service';
 
 const OPTS: BridgeModuleOptions = {
   apiBaseUrl: 'https://api.test.example',
@@ -34,13 +35,21 @@ const SNAPSHOT: SessionSnapshotData = {
   user: { id: 'u-1', email: 'a@b.co', role: 'admin', tenantId: 'tenant-1' },
 };
 
-// HS256 JWT with sub=u-1, tid=tenant-1 — sig is irrelevant for the SDK; only
-// the base64-decoded payload is read for cache keying.
+// Unsigned test JWT. These tests cover caching and slicing on the service
+// seam, so the verifier below stands in for BridgeAuthGuard's JwksService and
+// accepts any token, returning its payload as the verified claims. Real
+// signature verification — and forged-token rejection — is covered in
+// from-jwt-verification.spec.ts (TBP-673).
 function jwt(claims: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
   return `${header}.${payload}.sig`;
 }
+
+const ACCEPT_ANY_VERIFIER = {
+  verifyToken: async (token: string) =>
+    JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')),
+} as unknown as JwksService;
 
 function mockFetch(response: SessionSnapshotData, status = 200) {
   const calls: { url: string; init?: RequestInit }[] = [];
@@ -57,7 +66,7 @@ function mockFetch(response: SessionSnapshotData, status = 200) {
 
 function buildService(opts: { fetcher?: typeof fetch; ttlMs?: number } = {}) {
   const cache = new BridgePullCache({ ttlMs: opts.ttlMs ?? 30_000 });
-  const svc = new BridgeService(OPTS, cache);
+  const svc = new BridgeService(OPTS, cache, ACCEPT_ANY_VERIFIER);
   // The TenantScope created by fromJwt() defaults to global `fetch`; for tests
   // we want to inject a fake. Patch TenantScope via prototype.
   if (opts.fetcher) {
@@ -183,7 +192,8 @@ describe('BridgeService.fromJwt — a newer token refreshes the snapshot (TBP-64
   });
   afterEach(() => fetchSpy.mockRestore());
 
-  const svc = () => new BridgeService(OPTS, new BridgePullCache({ ttlMs: 30_000 }));
+  const svc = () =>
+    new BridgeService(OPTS, new BridgePullCache({ ttlMs: 30_000 }), ACCEPT_ANY_VERIFIER);
   const token = (iat: number, extra: Record<string, unknown> = {}) => jwt({ sub: 'u-1', tid: 'tenant-1', iat, ...extra });
 
   it('a token issued after the change sees the new plan at once, within the TTL', async () => {

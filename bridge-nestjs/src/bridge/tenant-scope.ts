@@ -89,21 +89,34 @@ export interface TenantUsageView {
 }
 
 export class TenantScope {
+  /**
+   * TBP-673 — resolves once the token is verified; rejects when it isn't.
+   * Every cache access and API call waits on it, so an unverifiable token
+   * never reads, writes or evicts a snapshot and never reaches bridge-api.
+   */
+  private readonly cacheKey: Promise<string>;
+
   constructor(
     private readonly userJwt: string,
-    private readonly cacheKey: string,
+    cacheKey: string | Promise<string>,
     private readonly cache: BridgePullCache,
     private readonly apiBaseUrl: string,
     private readonly appId: string,
     private readonly fetcher: typeof fetch = fetch,
-  ) {}
+  ) {
+    this.cacheKey = Promise.resolve(cacheKey);
+    // A scope nobody reads must not surface as an unhandled rejection (which
+    // terminates Node by default) — every read still observes the rejection.
+    this.cacheKey.catch(() => undefined);
+  }
 
   /**
    * Load the session.snapshot payload for this tenant. Cached via
    * `BridgePullCache`; concurrent callers share the in-flight fetch.
    */
-  snapshot(): Promise<SessionSnapshotData> {
-    return this.cache.get(`session:${this.cacheKey}`, () => this._fetchSnapshot());
+  async snapshot(): Promise<SessionSnapshotData> {
+    const key = await this.cacheKey;
+    return this.cache.get(`session:${key}`, () => this._fetchSnapshot());
   }
 
   /** Lazy: the subscription slice of the session snapshot. */
@@ -144,9 +157,18 @@ export class TenantScope {
     };
   }
 
-  /** Force-refresh the cached snapshot on the next access (post-mutation). */
-  invalidate(): void {
-    this.cache.invalidate(`session:${this.cacheKey}`);
+  /**
+   * Force-refresh the cached snapshot on the next access (post-mutation).
+   * Does nothing for an unverifiable token. Reads made after this call see
+   * the refreshed snapshot whether or not the returned promise is awaited.
+   */
+  invalidate(): Promise<void> {
+    // `.then` on the key itself (not an awaited wrapper) so this runs before
+    // any read issued after it — reads also continue from the same promise.
+    return this.cacheKey.then(
+      (key) => this.cache.invalidate(`session:${key}`),
+      () => undefined,
+    );
   }
 
   private async _reportUsage(
@@ -155,12 +177,18 @@ export class TenantScope {
     idempotencyKey?: string,
   ): Promise<void> {
     if (typeof metric !== 'string' || metric.length === 0) return;
+    let cacheKey: string;
+    try {
+      cacheKey = await this.cacheKey;
+    } catch {
+      return; // unverifiable token — best-effort contract: never throws, never sends
+    }
     const url = `${this.apiBaseUrl.replace(/\/+$/, '')}/usage/ingest`;
     const key =
       idempotencyKey ??
       (typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
-        : `${this.cacheKey}:${metric}:${value}`);
+        : `${cacheKey}:${metric}:${value}`);
     try {
       await this.fetcher(url, {
         method: 'POST',
@@ -177,6 +205,7 @@ export class TenantScope {
   }
 
   private async _fetchQuota(metric: string): Promise<QuotaSnapshot | null> {
+    await this.cacheKey; // rejects for an unverifiable token
     const url = `${this.apiBaseUrl.replace(/\/+$/, '')}/usage/quota/${encodeURIComponent(metric)}`;
     const res = await this.fetcher(url, {
       headers: {

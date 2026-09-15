@@ -208,24 +208,30 @@ healthCheck() {
 
 ## Tenant data — `BridgeService`
 
-Inject `BridgeService` and call `bridge.fromJwt(userJwt)` to read the current request's tenant —
-subscription, entitlements, branding, and user — all from a single cached fetch (default 30s; concurrent
-requests for the same user are deduped). A newer token for the same user refreshes it at once: Bridge
+Inject `BridgeService` and call `bridge.fromRequest(req)` on a route behind `BridgeAuthGuard` to read the
+current request's tenant — subscription, entitlements, branding, and user — all from a single cached fetch
+(default 30s; concurrent requests for the same user are deduped). `fromRequest` reuses the token the guard
+already verified. Where you hold a token some other way, `bridge.fromJwt(token)` verifies it exactly as the
+guard does (signature, issuer, audience, expiry) before reading anything; a token that fails rejects every
+read with `TokenVerificationError` and never touches another user's cached data. Never build a scope from
+the raw `Authorization` header on an unguarded route by decoding it yourself. A newer token for the same user refreshes it at once: Bridge
 re-issues a user's token when their plan or entitlements change, and the frontend SDKs pick that token up
 within a second, so `plans:` / `entitlement:` gates follow an upgrade on the user's next request. A client
 that keeps presenting its old token sees the change within the 30s.
 
 ```typescript
-import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
-import { BridgeService } from '@nebulr-group/bridge-nestjs';
+import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import type { Request } from 'express';
+import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
 
 @Controller('reports')
+@UseGuards(BridgeAuthGuard)
 export class ReportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('export')
-  async export(@Headers('authorization') auth: string) {
-    const tenant = this.bridge.fromJwt(auth.replace(/^Bearer\s+/i, ''));
+  async export(@Req() req: Request) {
+    const tenant = this.bridge.fromRequest(req);
 
     // Gate on a plan entitlement, server-side:
     if (!(await tenant.entitlements.can('pdf-export'))) {
@@ -251,12 +257,12 @@ What you can read on the returned scope (each field lazily resolves the cached f
 | `usage.report(metric, value?, key?)` | `Promise<void>` — report metered usage (TBP-275) |
 | `usage.quota(metric)` | `Promise<QuotaSnapshot \| null>` — live quota incl. metered overage cost |
 | `snapshot()` | `Promise<SessionSnapshotData>` (the full payload) |
-| `invalidate()` | force-refresh the cached snapshot on next access |
+| `invalidate()` | `Promise<void>` — force-refresh the cached snapshot on next access |
 
 > **Billing on the backend** means *reading* subscription state and *enforcing* entitlements — there is no
 > checkout or paywall here. Purchase and upgrade flows live in the frontend plugin and bridge-api webhooks.
 > `bridge.tenant(tenantId)` (arbitrary-tenant access for cron/admin paths) is not yet wired and throws a
-> clear error; use `bridge.fromJwt(userJwt)` from a request handler.
+> clear error; use `bridge.fromRequest(req)` from a request handler.
 
 ## Decorators
 

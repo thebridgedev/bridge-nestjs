@@ -8,8 +8,8 @@ Two things to know:
 
 1. **It reads on demand and caches.** Each tenant's data is fetched over REST and cached briefly. There
    are no push updates on the server; to react to a change (e.g. a plan upgrade), use Bridge **webhooks**.
-2. **It's per request.** Every request carries a different tenant. You pass the incoming user's JWT and
-   get back a scope bound to *that* user's tenant.
+2. **It's per request.** Every request carries a different tenant. You hand it the request (or the
+   user's token) and get back a scope bound to *that* user's tenant, only once the token is verified.
 
 ## Setup
 
@@ -17,16 +17,18 @@ Two things to know:
 `forRootAsync()`, so there is no extra wiring. Just inject it.
 
 ```typescript
-import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
-import { BridgeService } from '@nebulr-group/bridge-nestjs';
+import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import type { Request } from 'express';
+import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
 
 @Controller('reports')
+@UseGuards(BridgeAuthGuard)
 export class ReportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('export')
-  async export(@Headers('authorization') auth: string) {
-    const tenant = this.bridge.fromJwt(auth.replace(/^Bearer\s+/i, ''));
+  async export(@Req() req: Request) {
+    const tenant = this.bridge.fromRequest(req);
 
     if (!(await tenant.entitlements.can('pdf-export'))) {
       throw new ForbiddenException('Your plan does not include PDF export');
@@ -37,14 +39,27 @@ export class ReportsController {
 }
 ```
 
+## `bridge.fromRequest(req)`
+
+The usual path. On a route behind `BridgeAuthGuard` (per route or global), `fromRequest` returns a
+tenant scope for the user the guard authenticated, reusing the token the guard already verified. It
+throws if the guard didn't verify a user token on this request (an unguarded or `@Public()` route, or an
+API-token-only caller); it never falls back to reading a header.
+
 ## `bridge.fromJwt(userJwt)`
 
-`fromJwt` takes the raw user JWT (strip the `Bearer ` prefix) and returns a tenant scope. The JWT is
-forwarded to the Bridge API on the data fetch; the API derives the tenant from the token and returns the
-matching data. Requests for the same user are deduped onto a single round-trip.
+For a token you hold some other way (strip the `Bearer ` prefix). `fromJwt` verifies the token exactly as
+`BridgeAuthGuard` does (signature against the Bridge JWKS, issuer, audience = your app id, expiry)
+before any claim in it is used. The call itself stays synchronous; every read on the returned scope waits
+for verification, and a token that fails verification rejects each read with `TokenVerificationError`:
+no data is returned, and no cached data is read, written or evicted for it.
+
+Either way, the verified token is forwarded to the Bridge API on the data fetch; the API derives the
+tenant from the token and returns the matching data. Requests for the same user are deduped onto a single
+round-trip.
 
 > `bridge.tenant(tenantId)` (for accessing an arbitrary tenant from cron/admin code) is **not yet
-> available** and throws a clear error if called. Use `bridge.fromJwt(userJwt)` from a request handler.
+> available** and throws a clear error if called. Use `bridge.fromRequest(req)` from a request handler.
 
 ## What you can read
 
@@ -169,7 +184,7 @@ the Bridge API (webhooks drive the subscription lifecycle). Two ways to enforce:
 Gate inside a handler with an entitlement check:
 
 ```typescript
-if (!(await this.bridge.fromJwt(jwt).entitlements.can('feature-key'))) {
+if (!(await this.bridge.fromRequest(req).entitlements.can('feature-key'))) {
   throw new ForbiddenException();
 }
 ```
