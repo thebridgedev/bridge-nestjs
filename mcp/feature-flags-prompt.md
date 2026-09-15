@@ -279,14 +279,15 @@ BridgeFlagsModule.forRoot({
 // …or later: this.flags.setContext({ attributes: { region } }, /* merge */ true);
 ```
 
-**2. Per-request context, via `BridgeContextInterceptor`** — this is the mechanism for user-scoped evals. Registered as an `APP_INTERCEPTOR` in Step 1, it runs on every request and, in order:
+**2. Per-request context, via `BridgeContextInterceptor`** — this is the mechanism for user-scoped evals. Registered as an `APP_INTERCEPTOR` in Step 1, it runs on every request and:
 
-- reads the `x-bridge-context` header (constant `BRIDGE_CONTEXT_HEADER`) — a base64url JSON envelope the **frontend** Bridge SDK writes with `serializeContext(ctx)` — and decodes it with `deserializeContext`;
-- takes `identity` from that header, falling back to `req.bridgeUser.id`, then `req.user.id` (so an upstream auth guard supplies it when there is no header);
-- takes `attributes` **from the header only**;
-- stores the result at `req.bridgeFlagsContext`, and puts the raw `BridgeFlags` instance at `req.bridgeFlags` so `@Flag(...)` can reach it.
+- takes `identity` from the **verified** caller only: `req.bridgeUser.id` (set by `BridgeAuthGuard`), then `req.user.id` (your own server-side auth);
+- sets no attributes — targeting attributes come from attribute providers reading verified claims, or per-call `attributes`;
+- stores the result at `req.bridgeFlagsContext` (`undefined` when there is no verified user → anonymous evaluation), and puts the raw `BridgeFlags` instance at `req.bridgeFlags` so `@Flag(...)` can reach it.
 
-`BridgeFlagGuard` and `@Flag` both read `req.bridgeFlagsContext`. That is what makes frontend and backend bucket the same user identically instead of split-braining. A missing or malformed header is a silent no-op — the request still works, it just evaluates against the module-global context.
+`BridgeFlagGuard` and `@Flag` build the same verified context themselves, so a signed-in user buckets identically in the browser and on the server.
+
+**The `x-bridge-context` header is internal and never trusted from clients.** The SDK does not read it (TBP-671): any client can send one, and trusting it let a request evaluate as another user on another plan. Do not deserialize it yourself, and do not forward it from a proxy.
 
 **3. Per-call context** — highest precedence, wins on key collision:
 
@@ -296,7 +297,7 @@ this.flags.flag('new-pipeline', false, { identity: tenantId });               //
 this.flags.flag('worker-v2', false, { attributes: { queue: 'billing' } });    // system-level
 ```
 
-**Security rule:** the propagated header is client-controlled. It carries identity and custom attributes only — **never trust a client-sent `user.role` / `tenant.plan`.** If your rules target those, populate them yourself from verified JWT claims (`setContext` on a request-scoped provider, or the per-call `attributes`). This SDK does **not** auto-register `AuthAttributeProvider`; nothing wires your JWT into the eval context for you.
+**Security rule:** never evaluate with client-sent identity or attributes — **never trust a client-sent `user.role` / `tenant.plan`.** If your rules target those, populate them yourself from verified JWT claims (an attribute provider, or per-call `attributes` read from `req.bridgeUser`). This SDK does **not** auto-register `AuthAttributeProvider`; nothing wires your JWT into the eval context for you.
 
 ## How server-side evaluation actually works
 
@@ -342,7 +343,7 @@ Also not supported: there is no `refresh()` on `BridgeFlagsService`, and no auto
 5. **Flip it on.** `toggle_feature_flag { key: 'demo-flag', enabled: true }` (MCP), or `bridge flag toggle --id <id> --enabled true` / `bridge flag update --id <id> --state on` with the id from step 4 (CLI). Dashboard only if you have neither.
 6. **Observe the change.** Re-run the same two curls: **200**, and `{"demo-flag":true}` — with no redeploy and no restart, because the change arrived over the channel.
 7. **Flip it back off** and confirm both revert.
-8. **Targeting (if you wrote a rule).** On the CLI, `bridge flag eval <key> --identity user-123 --attribute tenant.plan=pro`; over MCP, re-read the rule with `list_feature_flags` (there is no eval tool). Either way, finish by issuing the request with that user's `x-bridge-context` header and confirming the endpoint agrees.
+8. **Targeting (if you wrote a rule).** On the CLI, `bridge flag eval <key> --identity user-123 --attribute tenant.plan=pro`; over MCP, re-read the rule with `list_feature_flags` (there is no eval tool). Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
 
 ---
 

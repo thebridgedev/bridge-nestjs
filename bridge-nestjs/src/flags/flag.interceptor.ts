@@ -1,14 +1,15 @@
-// bridge-nestjs/flags — `BridgeContextInterceptor` (TBP-200).
+// bridge-nestjs/flags — `BridgeContextInterceptor` (TBP-200, TBP-671).
 //
-// Pulls the propagated eval context out of the `x-bridge-context` header
-// (set by the frontend SDK via auth-core's `serializeContext`) and stashes
-// it on the request as `request.bridgeFlagsContext`. The guard + param
-// decorator read it from there so flag evals match what the frontend just
-// computed for the same user.
+// Puts the per-request eval context on the request as
+// `request.bridgeFlagsContext` (and the flags instance as
+// `request.bridgeFlags`, for `@Flag(...)`), so handlers can pass it straight
+// into `flags.flag(key, default, req.bridgeFlagsContext)`.
 //
-// When the header is missing or malformed, the interceptor is a no-op —
-// the request still works, it just falls back to the module's global
-// context for evals.
+// The context is built ONLY from what the server verified — `req.bridgeUser`,
+// then `req.user` (see `request-context.ts`). The `x-bridge-context` request
+// header is internal and is never trusted: a client can put any identity or
+// `tenant.plan` in it (TBP-671). With no verified user the context is
+// undefined and evaluation is anonymous.
 
 import {
   CallHandler,
@@ -16,13 +17,10 @@ import {
   Injectable,
   NestInterceptor,
 } from '@nestjs/common';
-import {
-  BRIDGE_CONTEXT_HEADER,
-  deserializeContext,
-} from '@nebulr-group/bridge-auth-core';
 import type { Observable } from 'rxjs';
 
 import { BridgeFlagsService } from './flags.service';
+import { verifiedFlagContext } from './request-context';
 
 @Injectable()
 export class BridgeContextInterceptor implements NestInterceptor {
@@ -33,30 +31,8 @@ export class BridgeContextInterceptor implements NestInterceptor {
     if (req) {
       // Surface the bridge for `@Flag(...)` param decorators.
       req.bridgeFlags = this.flags.bridge;
-
-      const headerValue = readHeader(req, BRIDGE_CONTEXT_HEADER);
-      const propagated = headerValue ? deserializeContext(headerValue) : undefined;
-
-      // Merge identity / attributes from the propagated header with anything
-      // an upstream guard already attached to `req.user` / `req.bridgeUser`.
-      const identity =
-        propagated?.identity ??
-        (req?.bridgeUser?.id as string | undefined) ??
-        (req?.user?.id as string | undefined);
-      const attributes = {
-        ...(propagated?.attributes ?? {}),
-      };
-
-      req.bridgeFlagsContext = identity || Object.keys(attributes).length > 0
-        ? { identity, attributes }
-        : undefined;
+      req.bridgeFlagsContext = verifiedFlagContext(req);
     }
     return next.handle();
   }
-}
-
-function readHeader(req: { headers?: Record<string, string | string[] | undefined> }, name: string): string | undefined {
-  const raw = req.headers?.[name] ?? req.headers?.[name.toLowerCase()];
-  if (Array.isArray(raw)) return raw[0];
-  return raw;
 }

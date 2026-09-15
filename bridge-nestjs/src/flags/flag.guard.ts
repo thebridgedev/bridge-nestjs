@@ -1,13 +1,16 @@
 // bridge-nestjs/flags — `BridgeFlagGuard` (TBP-200).
 //
 // Reads `@RequireFlag('feature_x')` metadata from the handler/class, looks
-// up the flag value via BridgeFlagsService (honoring the per-request eval
-// context populated by `BridgeContextInterceptor`), and throws
-// ForbiddenException when the flag is off.
+// up the flag value via BridgeFlagsService, and throws ForbiddenException when
+// the flag is off.
 //
 // The guard does NOT verify identity. Compose it with `BridgeAuthGuard` (or
-// your own auth) so `req.user` / `req.bridgeUser` is populated before this
-// runs — that identity is what gets bucketed for rolled-out rules.
+// your own auth) so `req.bridgeUser` / `req.user` is populated before this
+// runs — that verified identity is what gets bucketed for rolled-out rules.
+// The eval context is built here, from verified sources only
+// (`request-context.ts`); nothing a client sends — the `x-bridge-context`
+// header, or anything copied from it onto the request — can change the
+// decision (TBP-671).
 
 import {
   CanActivate,
@@ -19,6 +22,7 @@ import { Reflector } from '@nestjs/core';
 
 import { REQUIRE_FLAG_KEY, type RequireFlagMetadata } from './flag.decorator';
 import { BridgeFlagsService } from './flags.service';
+import { verifiedFlagContext } from './request-context';
 
 @Injectable()
 export class BridgeFlagGuard implements CanActivate {
@@ -40,9 +44,7 @@ export class BridgeFlagGuard implements CanActivate {
     if (req) {
       req.bridgeFlags = this.flags.bridge;
     }
-    const perRequestCtx = req?.bridgeFlagsContext;
-
-    const value = this.flags.flag(meta.key, meta.defaultValue, perRequestCtx);
+    const value = this.flags.flag(meta.key, meta.defaultValue, verifiedFlagContext(req));
 
     const expected = meta.options.equals === undefined ? true : meta.options.equals;
     const passes = isEqual(value, expected) || (!!value && expected === true);

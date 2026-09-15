@@ -244,7 +244,7 @@ describe('BridgeContextInterceptor', () => {
     } as unknown as ExecutionContext;
   }
 
-  it('decodes a propagated context header and stashes it on the request', () => {
+  it('ignores a client-supplied x-bridge-context header (TBP-671)', () => {
     const header = serializeContext({
       identity: 'user-42',
       attributes: { plan: 'pro' },
@@ -255,10 +255,7 @@ describe('BridgeContextInterceptor', () => {
     const next = { handle: () => ({ subscribe: () => undefined }) } as any;
     interceptor.intercept(ctx, next);
     const req = (ctx.switchToHttp().getRequest() as any);
-    expect(req.bridgeFlagsContext).toEqual({
-      identity: 'user-42',
-      attributes: { plan: 'pro' },
-    });
+    expect(req.bridgeFlagsContext).toBeUndefined();
   });
 
   it('falls back to req.bridgeUser.id when no header is present', () => {

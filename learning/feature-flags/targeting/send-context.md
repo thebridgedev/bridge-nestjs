@@ -63,12 +63,13 @@ redeploy.
 
 ## Per-request context via the interceptor
 
-Threading `context` through every call by hand gets tedious. When a Bridge
-frontend forwards its context on the `x-bridge-context` header,
-`BridgeContextInterceptor` deserializes it once per request and puts it on
-`req.bridgeFlagsContext`, which the guard and `@Flag` decorator read
-automatically, so you don't pass it manually on gated routes. See
-[Receiving forwarded context](/feature-flags/using/backend/).
+Threading `context` through every call by hand gets tedious.
+`BridgeContextInterceptor` puts the verified caller's identity
+(`req.bridgeUser`, then `req.user`) on `req.bridgeFlagsContext` once per
+request, and the guard and `@Flag` decorator evaluate for that same verified
+caller automatically, so you don't pass it manually on gated routes. The
+`x-bridge-context` header a client sends is ignored. See
+[Per-request context](/feature-flags/using/backend/).
 
 ## A global context on the module
 

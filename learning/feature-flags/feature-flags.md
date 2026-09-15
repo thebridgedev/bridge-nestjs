@@ -51,9 +51,9 @@ change live.
 - [Guard routes](/feature-flags/using/guard-routes/): gate whole endpoints
   behind a flag with `BridgeFlagGuard` + `@RequireFlag`; a request is rejected
   before your handler ever runs.
-- [Receiving forwarded context](/feature-flags/using/backend/): read the eval
-  context a Bridge frontend forwards in the `x-bridge-context` header so your
-  server and the browser agree on identity and bucketing.
+- [Per-request context](/feature-flags/using/backend/): how each request is
+  evaluated for the verified caller, and why the `x-bridge-context` header a
+  client sends is never trusted.
 
 ## Targeting
 
@@ -66,9 +66,9 @@ change live.
   supply an `identity` for bucketing and app-specific facts (like a project
   count) per call, per request via the interceptor, or module-wide via
   `initialContext`.
-- [Target anonymous visitors](/feature-flags/targeting/anonymous/): reuse the
-  anonymous ID a Bridge frontend forwards, or supply your own stable identity,
-  so percentage rollouts bucket the same visitor the same way on both sides.
+- [Target anonymous visitors](/feature-flags/targeting/anonymous/): supply
+  your own stable identity for callers who aren't signed in, so percentage
+  rollouts bucket them consistently.
 
 > **Framework note:** The main `@nebulr-group/bridge-nestjs` entry point also
 > ships an on-demand path (`@RequireFeatureFlag` / `FeatureFlagService`) that
