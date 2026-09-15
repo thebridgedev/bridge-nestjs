@@ -180,16 +180,18 @@ export class ReportsService {
 ## 7. Tenant data: subscription and entitlement gating
 
 ```typescript
-import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
-import { BridgeService } from '@nebulr-group/bridge-nestjs';
+import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import type { Request } from 'express';
+import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
 
 @Controller('reports')
+@UseGuards(BridgeAuthGuard)
 export class ReportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('export')
-  async export(@Headers('authorization') auth: string) {
-    const tenant = this.bridge.fromJwt(auth.replace(/^Bearer\s+/i, ''));
+  async export(@Req() req: Request) {
+    const tenant = this.bridge.fromRequest(req); // the token BridgeAuthGuard verified
 
     if (!(await tenant.entitlements.can('pdf-export'))) {
       throw new ForbiddenException('Your plan does not include PDF export');

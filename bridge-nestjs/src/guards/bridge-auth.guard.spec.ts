@@ -16,6 +16,7 @@ jest.mock('jose', () => ({
 import { ExecutionContext, ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { BridgeAuthGuard } from './bridge-auth.guard';
+import { verifiedUserTokenFor } from '../bridge/verified-request';
 import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
@@ -81,7 +82,7 @@ describe('BridgeAuthGuard', () => {
   let configService: jest.Mocked<BridgeConfigService>;
   let jwksService: jest.Mocked<JwksService>;
   let featureFlagService: jest.Mocked<FeatureFlagService>;
-  let bridgeService: { fromJwt: jest.Mock };
+  let bridgeService: { fromJwt: jest.Mock; fromRequest: jest.Mock };
   let tenantScope: {
     subscription: Promise<any>;
     entitlements: { can: jest.Mock };
@@ -116,6 +117,7 @@ describe('BridgeAuthGuard', () => {
     };
     bridgeService = {
       fromJwt: jest.fn(() => tenantScope),
+      fromRequest: jest.fn(() => tenantScope),
     };
 
     guard = new BridgeAuthGuard(
@@ -327,7 +329,10 @@ describe('BridgeAuthGuard', () => {
 
       const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
-      expect(bridgeService.fromJwt).toHaveBeenCalledWith('token');
+      // TBP-673 — reads the snapshot through the request it just verified,
+      // instead of handing the raw token to fromJwt to verify a second time.
+      expect(bridgeService.fromRequest).toHaveBeenCalledTimes(1);
+      expect(bridgeService.fromJwt).not.toHaveBeenCalled();
     });
 
     // TBP-614 — reported by a consuming app reading the source and asking us
@@ -558,7 +563,31 @@ describe('BridgeAuthGuard', () => {
       const ctx = makeContext({ path: '/items', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
       expect(bridgeService.fromJwt).not.toHaveBeenCalled();
+      expect(bridgeService.fromRequest).not.toHaveBeenCalled();
       expect(featureFlagService.evaluateRequirement).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('verified token hand-off to BridgeService.fromRequest (TBP-673)', () => {
+    it('records the token and claims it verified on the request', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
+      const ctx = makeContext({ headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(verifiedUserTokenFor(ctx.switchToHttp().getRequest())).toEqual({
+        token: 'token',
+        claims: mockClaims,
+      });
+    });
+
+    it('records nothing when verification fails', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      jwksService.verifyToken.mockRejectedValue(
+        new TokenVerificationError('Invalid token', 'TOKEN_INVALID'),
+      );
+      const ctx = makeContext({ headers: { authorization: 'Bearer forged' } });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(UnauthorizedException);
+      expect(verifiedUserTokenFor(ctx.switchToHttp().getRequest())).toBeUndefined();
     });
   });
 

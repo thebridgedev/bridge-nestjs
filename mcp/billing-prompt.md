@@ -87,23 +87,23 @@ A caller whose tenant is on `free` hits `/reports/...` and is rejected before th
 
 ### Programmatic — `BridgeService`
 
-`BridgeService` is the server-side counterpart of the frontend `bridge` object. Inject it, then call `bridge.fromJwt(userJwt)` to get a request-scoped `TenantScope` for the tenant that owns the JWT. The scope fetches `GET {apiBaseUrl}/session/init` **once** (forwarding the JWT as `Authorization: Bearer` plus the `x-app-id` header) and caches the result via auth-core's `BridgePullCache` (default 30s TTL), so all slices share a single round-trip.
+`BridgeService` is the server-side counterpart of the frontend `bridge` object. Inject it, then call `bridge.fromRequest(req)` on a route behind `BridgeAuthGuard` to get a request-scoped `TenantScope` for the tenant of the user the guard verified. The scope fetches `GET {apiBaseUrl}/session/init` **once** (forwarding the verified JWT as `Authorization: Bearer` plus the `x-app-id` header) and caches the result via auth-core's `BridgePullCache` (default 30s TTL), so all slices share a single round-trip.
+
+**Never read the raw `Authorization` header yourself.** Behind the guard, use `fromRequest(req)`. `bridge.fromJwt(token)` exists for a token you hold some other way; it verifies the token exactly as the guard does before any claim is used, and a token that fails rejects every read with `TokenVerificationError` (TBP-673).
 
 ```ts
-import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
-import { BridgeService } from '@nebulr-group/bridge-nestjs';
-
-function stripBearer(authHeader = ''): string {
-  return authHeader.replace(/^Bearer\s+/i, '');
-}
+import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import type { Request } from 'express';
+import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
 
 @Controller('exports')
+@UseGuards(BridgeAuthGuard)
 export class ExportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get()
-  async export(@Headers('authorization') auth: string) {
-    const tenant = this.bridge.fromJwt(stripBearer(auth));
+  async export(@Req() req: Request) {
+    const tenant = this.bridge.fromRequest(req);
 
     if (!(await tenant.entitlements.can('data_export'))) {
       throw new ForbiddenException('Your plan does not include data export.');
@@ -114,14 +114,14 @@ export class ExportsController {
 }
 ```
 
-> `bridge.fromJwt(userJwt)` is the supported path. `bridge.tenant(tenantId)` (arbitrary tenant for cron/admin) is **not yet wired** and throws a clear error pointing you back to `fromJwt` — don't use it.
+> `bridge.fromRequest(req)` is the supported path. `bridge.tenant(tenantId)` (arbitrary tenant for cron/admin) is **not yet wired** and throws a clear error pointing you back to `fromRequest` — don't use it.
 
 ## Reading subscription state
 
 `TenantScope` exposes lazy, promise-returning slices off the single cached snapshot:
 
 ```ts
-const tenant = this.bridge.fromJwt(jwt);
+const tenant = this.bridge.fromRequest(req);
 
 const sub = await tenant.subscription;
 // SubscriptionSnapshot:
@@ -189,12 +189,13 @@ Example — surface plan and lifecycle to the client:
 
 ```ts
 @Controller('billing')
+@UseGuards(BridgeAuthGuard)
 export class BillingController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('status')
-  async status(@Headers('authorization') auth: string) {
-    const sub = await this.bridge.fromJwt(stripBearer(auth)).subscription;
+  async status(@Req() req: Request) {
+    const sub = await this.bridge.fromRequest(req).subscription;
     return {
       plan: sub.plan.slug,
       status: sub.status,

@@ -13,6 +13,7 @@ import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
 import { BridgeService } from '../bridge/bridge.service';
+import { rememberVerifiedUserToken } from '../bridge/verified-request';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { REQUIRED_ROLE_KEY } from '../decorators/require-role.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-feature-flag.decorator';
@@ -325,6 +326,8 @@ export class BridgeAuthGuard implements CanActivate {
       request.bridgeUser = user;
       request.bridgeTenant = tenant || undefined;
       request.bridgeAccessToken = token;
+      // TBP-673 — lets `bridge.fromRequest(req)` reuse this verification.
+      rememberVerifiedUserToken(request, token, claims);
 
       this.configService.log('User authenticated', { userId: user.id, tenantId: user.tenantId });
     }
@@ -425,7 +428,7 @@ export class BridgeAuthGuard implements CanActivate {
       // context these checks need, so they run in the user branch and require
       // the access token to resolve the snapshot / evaluate flags.
       if (matchingRule && token) {
-        await this.enforceRouteRuleGating(matchingRule, token);
+        await this.enforceRouteRuleGating(matchingRule, token, request);
       }
     }
 
@@ -445,7 +448,11 @@ export class BridgeAuthGuard implements CanActivate {
    * the request (402 `billing_locked` for plan/entitlement resolution errors,
    * 403 for flag-evaluation errors).
    */
-  private async enforceRouteRuleGating(rule: RouteRule, token: string): Promise<void> {
+  private async enforceRouteRuleGating(
+    rule: RouteRule,
+    token: string,
+    request: object,
+  ): Promise<void> {
     // 1. Feature flag (403). Reuses the decorator eval path.
     if (rule.featureFlag) {
       let flagEnabled: boolean;
@@ -487,7 +494,8 @@ export class BridgeAuthGuard implements CanActivate {
 
     // 2 & 3. Plan + entitlement both read the tenant snapshot (one round-trip,
     // shared via BridgePullCache). Fail-closed: snapshot resolution error → 402.
-    const tenant = this.bridgeService.fromJwt(token);
+    // Reuses the verification above rather than verifying the token again.
+    const tenant = this.bridgeService.fromRequest(request);
 
     if (needsPlan) {
       let planSlug: string;
