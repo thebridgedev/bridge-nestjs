@@ -1,21 +1,15 @@
-# Receiving forwarded context
+# Per-request context
 
-Evaluating a flag in NestJS is local and instant. But when a Bridge frontend
-(Svelte, React, Angular, Next.js) also evaluates the *same* flag for the
-*same* user, both sides have to agree on identity; otherwise a percentage
-rollout can put the browser in the "on" bucket and your API in the "off"
-bucket for one request, a split-brain. The frontend knows the visitor's
-identity and whatever attributes it set; your NestJS service has no way to
-know either unless the frontend sends them.
-
-The frontend SDKs serialize their eval context into an `x-bridge-context`
-header on requests to your API. This page is about receiving it.
+Evaluating a flag in NestJS is local and instant. For a flag with a
+percentage rollout or a targeting rule, the evaluation needs to know *who* the
+request is for. On the backend that answer comes from one place only: the
+caller your server verified.
 
 ## Wire up BridgeContextInterceptor
 
-Register `BridgeContextInterceptor` as an app-level interceptor. It reads the
-`x-bridge-context` header off each request, deserializes it, and stashes the
-resulting `{ identity, attributes }` on `req.bridgeFlagsContext`:
+Register `BridgeContextInterceptor` as an app-level interceptor. On each
+request it puts the verified caller's identity on `req.bridgeFlagsContext`
+(and the flags instance on `req.bridgeFlags`, which `@Flag` needs):
 
 ```typescript
 // app.module.ts
@@ -35,17 +29,17 @@ import { BridgeFlagsModule, BridgeContextInterceptor } from '@nebulr-group/bridg
 export class AppModule {}
 ```
 
-Once it's in place, the guard (`@RequireFlag`), the `@Flag` param decorator,
-and any per-request eval you do all pick up `req.bridgeFlagsContext`
-automatically; they bucket against the same identity the frontend just used.
-A missing or malformed header is a no-op: the request still works, it just
-falls back to the module's global context.
+The identity is `req.bridgeUser.id` (set by `BridgeAuthGuard` from a
+signature-checked token), falling back to `req.user.id` (set by your own
+server-side auth). With neither, the request is evaluated anonymously:
+`req.bridgeFlagsContext` is `undefined`, and a flag with a rule or a rollout
+returns its default. The guard (`@RequireFlag`) and the `@Flag` param
+decorator evaluate for the same verified caller on their own, so they work
+whether or not the interceptor is registered.
 
-## Evaluate with the forwarded context
+## Evaluate with the per-request context
 
-The interceptor merges the forwarded identity with anything an upstream auth
-guard already put on `req.bridgeUser` / `req.user`. Read the resolved context
-off the request and pass it straight into `flag()`:
+Read the context off the request and pass it straight into `flag()`:
 
 ```typescript
 import { Controller, Post, Req } from '@nestjs/common';
@@ -63,17 +57,27 @@ export class CheckoutController {
 }
 ```
 
-Because the identity matches what the browser evaluated against, the browser
-and your API land in the same rollout bucket for that user.
+Because the Bridge frontends evaluate with the same user id, the browser and
+your API land in the same rollout bucket for a signed-in user.
 
-## What to trust, and what not to
+## The x-bridge-context header is not trusted
 
-Only accept forwarded identity and attributes the backend genuinely can't
-derive itself: an anonymous visitor ID, a cart size held in client state, a
-locale picked in the UI. **Never trust a forwarded `role`- or `plan`-style
-attribute**: the browser could set any value. Read those from your own
+Bridge frontends can send an `x-bridge-context` header. It is internal, and
+**this SDK never reads identity or attributes from it**. Any client can send
+that header with any content: before 0.7.0-beta.1, a request carrying
+somebody else's user id and `tenant.plan: enterprise` was evaluated as that
+user on that plan (TBP-671). If you proxy requests from a frontend to NestJS,
+you don't need to forward it, and nothing on the backend should read it.
+
+Targeting attributes such as `user.role` and `tenant.plan` come from your own
 verified sources (the user's JWT, your own record of the workspace, which the
-API calls a *tenant*) by registering an `AuthAttributeProvider`, so plan/role
-targeting resolves from claims you verified rather than values the wire
-handed you. See
+API calls a *tenant*) through an attribute provider. See
 [Target by plan or role](/feature-flags/targeting/by-plan-or-role/).
+App-specific facts your server knows (a project count, a region) go in
+per-call `attributes`; see
+[Send context from your backend](/feature-flags/targeting/send-context/).
+
+## Route guards are not authorization
+
+Flags decide which code path runs. Protect data with `BridgeAuthGuard`, roles
+and privileges, and your own checks.

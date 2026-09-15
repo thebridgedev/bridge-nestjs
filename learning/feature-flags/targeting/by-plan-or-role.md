@@ -57,10 +57,10 @@ the collision on the flag detail page.
 
 `getClaims()` must read from a server-verified source (`req.bridgeUser` or
 `req.bridgeApiToken`, populated by `BridgeAuthGuard`) and never from anything
-a client supplied. This is the same "never trust client-sent role/plan
-attributes" rule as forwarded context: a browser can put any `role` in the
-`x-bridge-context` header, so plan/role targeting has to resolve from your own
-JWT, not from the wire.
+a client supplied. A browser can put any `role` or `plan` in a request, so
+plan/role targeting has to resolve from your own verified JWT, not from the
+wire. The SDK ignores the `x-bridge-context` header for exactly this reason:
+it is internal and never trusted from clients.
 
 ## Example: gate a feature by role
 

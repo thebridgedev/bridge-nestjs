@@ -64,11 +64,11 @@ legacyReport() {
 `BridgeFlagGuard` only reads the flag; it never authenticates the caller. If
 the flag has a percentage rollout or targets a user attribute, the request
 needs an identity to bucket against. Compose the flag guard with
-`BridgeAuthGuard` (or your own auth) so `req.bridgeUser` /
-`req.bridgeApiToken` is populated first, and wire `BridgeContextInterceptor`
-so a forwarded or derived identity lands on `req.bridgeFlagsContext` before
-the guard evaluates. See
-[Receiving forwarded context](/feature-flags/using/backend/) and
+`BridgeAuthGuard` (or your own auth) so `req.bridgeUser` (or `req.user`) is
+populated first: the guard evaluates for that verified caller, and a request
+without one is evaluated anonymously. Nothing the client sends, including the
+`x-bridge-context` header, changes the guard's decision. See
+[Per-request context](/feature-flags/using/backend/) and
 [Gate features by role or privilege](/auth/roles/gate-with-flags/).
 
 ## Flag values as handler parameters: @Flag

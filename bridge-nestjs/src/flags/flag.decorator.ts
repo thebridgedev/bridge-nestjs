@@ -6,9 +6,9 @@
 //                                to take effect.
 //
 // `@Flag('flag_name', default)` → param decorator that reads the flag value
-//                                 from BridgeFlags for the current request
-//                                 (honors the per-request context populated
-//                                 by BridgeContextInterceptor).
+//                                 from BridgeFlags for the current request,
+//                                 evaluated for the verified caller only
+//                                 (TBP-671 — never from request headers).
 
 import {
   SetMetadata,
@@ -16,6 +16,8 @@ import {
   type CustomDecorator,
   type ExecutionContext,
 } from '@nestjs/common';
+
+import { verifiedFlagContext } from './request-context';
 
 /** Metadata key for the `@RequireFlag` decorator — consumed by `BridgeFlagGuard`. */
 export const REQUIRE_FLAG_KEY = 'bridge:flag:require';
@@ -67,9 +69,10 @@ export function RequireFlag(
  *   @Get('home')
  *   home(@Flag('show_new_home', false) showNew: boolean) { ... }
  *
- * Reads from `request.bridgeFlagsContext` (set by `BridgeContextInterceptor`)
- * + the global BridgeFlags instance stored at `request.app.get('BRIDGE_FLAGS')`
- * via a tiny indirection through the request — see the interceptor.
+ * Evaluates against the verified caller (`req.bridgeUser`, then `req.user`)
+ * using the BridgeFlags instance `BridgeContextInterceptor` / `BridgeFlagGuard`
+ * put on the request. Nothing a client sends — including the internal
+ * `x-bridge-context` header — changes the value (TBP-671).
  */
 export const Flag = createParamDecorator(
   (data: { key: string; defaultValue: unknown }, ctx: ExecutionContext) => {
@@ -84,8 +87,7 @@ export const Flag = createParamDecorator(
     if (!bridge) {
       return data?.defaultValue;
     }
-    const perRequestCtx = req?.bridgeFlagsContext as unknown;
-    return bridge.flag(data.key, data.defaultValue, perRequestCtx as any).value;
+    return bridge.flag(data.key, data.defaultValue, verifiedFlagContext(req)).value;
   },
 );
 

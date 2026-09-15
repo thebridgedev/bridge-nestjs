@@ -6,24 +6,21 @@ buckets consistently into a rollout before they ever sign in. A backend has no
 such ambient identity. A NestJS process handles requests for many callers, so
 there's nothing to persist and no "current visitor" to fall back on.
 
-That means: **on the backend, anonymous bucketing only works if the caller
-brings an identity.** There are two ways it gets there.
+That means: **on the backend, a request with no verified user is evaluated
+anonymously.** The guard, `@Flag` and `req.bridgeFlagsContext` carry no
+identity for it, so a flag with a targeting rule or a percentage rollout
+returns its default.
 
-## Use a forwarded anonymous ID
-
-When the request comes from a Bridge frontend, the anonymous ID the browser
-already generated rides along in the `x-bridge-context` header.
-`BridgeContextInterceptor` deserializes it onto `req.bridgeFlagsContext`, and
-the guard, `@Flag`, and any per-request eval reuse it, so the browser and your
-API bucket the same pre-login visitor into the same rollout. This is the
-common case, and it needs no anonymous-specific code beyond wiring the
-interceptor. See
-[Receiving forwarded context](/feature-flags/using/backend/).
+The SDK does not read an identity from the `x-bridge-context` header a
+browser may send: that header is internal and client-controlled, and trusting
+it would let any caller evaluate as any user (TBP-671). See
+[Per-request context](/feature-flags/using/backend/).
 
 ## Supply a stable identity yourself
 
-For a request with no forwarded context (a webhook, a server-to-server call, a
-job), pass whatever stable string the evaluation should be sticky on. It
+For a request with no signed-in user (an anonymous visitor, a webhook, a
+server-to-server call, a job), pass whatever stable string the evaluation
+should be sticky on, from something your server controls. It
 doesn't have to be a user id; a workspace id, a session id, or any durable key
 works, as long as the *same* subject always yields the *same* string:
 

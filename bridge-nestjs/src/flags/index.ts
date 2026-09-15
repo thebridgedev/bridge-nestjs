@@ -25,6 +25,11 @@ export { BridgeContextInterceptor } from './flag.interceptor';
 
 // Auth-core re-exports so consumers don't need a direct dep when they only
 // want flag types.
+//
+// `BRIDGE_CONTEXT_HEADER` / `deserializeContext` stay exported for
+// compatibility, but never use them to build an eval context from an incoming
+// request: the `x-bridge-context` header is internal and client-controlled, and
+// this SDK does not read it (TBP-671).
 export {
   BridgeFlags,
   BridgePullCache,

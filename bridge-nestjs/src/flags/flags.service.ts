@@ -40,7 +40,8 @@ export class BridgeFlagsService implements OnModuleDestroy {
 
   /**
    * Read a flag value. TS infers `T` from `defaultValue`. Pass `context`
-   * for per-call overrides (e.g. impersonation, identity from a header).
+   * for per-call overrides (e.g. impersonation, or the verified caller from
+   * `req.bridgeFlagsContext`). Never build it from request headers (TBP-671).
    *
    * auth-core's `bridge.flag()` returns `FlagEvalResult<T> = { passed, value }`
    * as of 0.4.0-beta.10; this wrapper extracts `.value` to preserve the
