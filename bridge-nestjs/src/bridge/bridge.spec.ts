@@ -163,3 +163,67 @@ describe('BridgeService.fromJwt', () => {
     expect(fn).toHaveBeenCalledTimes(2);
   });
 });
+
+// TBP-644 — plan / entitlement changes reach the gates as soon as the user
+// has a newer token. These go through the REAL fromJwt (the helper above
+// replaces it), with the global fetch stubbed.
+describe('BridgeService.fromJwt — a newer token refreshes the snapshot (TBP-644)', () => {
+  const FREE: SessionSnapshotData = {
+    ...SNAPSHOT,
+    tenant: { ...SNAPSHOT.tenant, subscription: { plan: { slug: 'free', name: 'Free' }, status: 'active' } },
+  };
+  let current: SessionSnapshotData;
+  let fetchSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    current = FREE;
+    fetchSpy = jest.spyOn(global, 'fetch').mockImplementation(
+      async () => ({ ok: true, status: 200, json: async () => current }) as Response,
+    );
+  });
+  afterEach(() => fetchSpy.mockRestore());
+
+  const svc = () => new BridgeService(OPTS, new BridgePullCache({ ttlMs: 30_000 }));
+  const token = (iat: number, extra: Record<string, unknown> = {}) => jwt({ sub: 'u-1', tid: 'tenant-1', iat, ...extra });
+
+  it('a token issued after the change sees the new plan at once, within the TTL', async () => {
+    const s = svc();
+    expect((await s.fromJwt(token(100)).subscription).plan.slug).toBe('free');
+    current = SNAPSHOT; // plan changed to pro on the server
+    expect((await s.fromJwt(token(200, { plan: 'pro' })).subscription).plan.slug).toBe('pro');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('the old token then reads the fresher snapshot too, without another fetch', async () => {
+    const s = svc();
+    await s.fromJwt(token(100)).subscription;
+    current = SNAPSHOT;
+    await s.fromJwt(token(200)).subscription;
+    expect((await s.fromJwt(token(100)).subscription).plan.slug).toBe('pro');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('repeating the same token keeps the cache (one fetch per TTL)', async () => {
+    const s = svc();
+    const t = token(100);
+    await s.fromJwt(t).subscription;
+    await s.fromJwt(t).entitlements.can('canExport');
+    await s.fromJwt(t).subscription;
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("another user's newer token does not drop this user's snapshot", async () => {
+    const s = svc();
+    await s.fromJwt(token(100)).subscription;
+    await s.fromJwt(jwt({ sub: 'u-2', tid: 'tenant-1', iat: 500 })).subscription;
+    await s.fromJwt(token(100)).subscription;
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // u-1 once, u-2 once
+  });
+
+  it('an older token arriving after a newer one does not refetch', async () => {
+    const s = svc();
+    await s.fromJwt(token(200)).subscription;
+    await s.fromJwt(token(100)).subscription;
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});

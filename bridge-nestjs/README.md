@@ -210,7 +210,10 @@ healthCheck() {
 
 Inject `BridgeService` and call `bridge.fromJwt(userJwt)` to read the current request's tenant —
 subscription, entitlements, branding, and user — all from a single cached fetch (default 30s; concurrent
-requests for the same user are deduped).
+requests for the same user are deduped). A newer token for the same user refreshes it at once: Bridge
+re-issues a user's token when their plan or entitlements change, and the frontend SDKs pick that token up
+within a second, so `plans:` / `entitlement:` gates follow an upgrade on the user's next request. A client
+that keeps presenting its old token sees the change within the 30s.
 
 ```typescript
 import { Controller, Get, Headers, ForbiddenException } from '@nestjs/common';
@@ -421,12 +424,18 @@ Recommended client handling:
 
 ## Read modes — channel vs pull
 
-`BridgeFlagsModule.forRoot({...})` accepts a `runtimeMode` option that picks how the SDK stays fresh:
+`BridgeFlagsModule.forRoot({...})` loads your app's flag rules before the module finishes initialising
+(waiting at most 5s), so the first request already sees real values. The app is taken from the `appId`
+claim of a Bridge API token; pass `appId` explicitly if your `apiKey` isn't one. `runtimeMode` picks how
+the rules stay fresh after that:
 
-- **`'channel'`** (default) — opens a WebSocket to the per-app realtime channel. Use for **long-running
-  services** (NestJS HTTP servers, workers) where live flag/quota/entitlement updates matter.
+- **`'channel'`** (default) — subscribes to the app's live channel with the API key as its credential, where
+  the Bridge deployment admits server SDKs to it (it says so on `GET /realtime/config`). Changes then apply
+  as they happen, and the rules reload whenever the connection (re)opens. While no channel is open, the
+  rules refresh every `pullCache.ttlMs` (default 30s). Use for **long-running services**.
 - **`'pull'`** — never opens a WebSocket. Use for **ephemeral runtimes** (cron jobs, serverless functions,
-  webhook handlers, CLI scripts). Reads go through a TTL-bounded REST cache (`BridgePullCache`, default 30s).
+  webhook handlers, CLI scripts). The rules refresh at most every `pullCache.ttlMs` (default 30s), triggered
+  by reads, so an idle function does no work.
 
 ```ts
 BridgeFlagsModule.forRoot({

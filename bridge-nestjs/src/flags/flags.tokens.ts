@@ -30,6 +30,12 @@ export interface BridgeFlagsModuleOptions {
   /** JWT-shaped workspace API key. */
   apiKey: string;
   /**
+   * The app whose flags this service evaluates. Optional when `apiKey` is a
+   * Bridge API token — its `appId` claim is used. Needed to load the flag
+   * rules and to subscribe to the app's live channel.
+   */
+  appId?: string;
+  /**
    * Runtime mode. Defaults to 'backend' — the server-side semantics that
    * refuse to bucket rolled-out rules without an explicit identity.
    */
@@ -52,7 +58,12 @@ export interface BridgeFlagsModuleOptions {
    * `realtime.enabled`, and a TTL-bounded REST cache backs reads.
    */
   runtimeMode?: BridgeRuntimeMode;
-  /** Phase 6 (TBP-290/340) — pull-mode cache options (TTL). Only honored when runtimeMode='pull'. */
+  /**
+   * TTL options (default 30 s). Sets how often the flag rules refresh when no
+   * live channel is open — always in 'pull' mode, and in 'channel' mode while
+   * the socket is down or the deployment doesn't admit server SDKs — and the
+   * TTL of the injectable `BRIDGE_PULL_CACHE`.
+   */
   pullCache?: PullCacheOptions;
   /**
    * Internal — set by `forRoot`. Lets the service tear down telemetry on
