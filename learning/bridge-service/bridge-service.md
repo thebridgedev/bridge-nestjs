@@ -50,7 +50,8 @@ matching data. Requests for the same user are deduped onto a single round-trip.
 
 The first access to any field triggers one fetch that returns subscription + entitlements + branding +
 user together. The result is cached (default **30s**); concurrent callers share the in-flight fetch.
-Every field below resolves lazily off that single fetch.
+A newer token for the same user starts a fresh fetch, so a plan change shows up on the user's next
+request with their refreshed token. Every field below resolves lazily off that single fetch.
 
 ```typescript
 interface SessionSnapshotData {
@@ -177,6 +178,9 @@ if (!(await this.bridge.fromJwt(jwt).entitlements.can('feature-key'))) {
 
 - Default cache lifetime is **30s**. The same cache is injectable directly via `BRIDGE_PULL_CACHE` for
   other REST data you want to dedupe (see the README's "Read modes: channel vs pull" section).
+- A user's cached snapshot is dropped as soon as a newer token for that user arrives. Bridge re-issues
+  a user's token when their plan, role or entitlements change, and the frontend SDKs pick it up within a
+  second, so `plans:` / `entitlement:` gates follow an upgrade without waiting out the 30s.
 - To react to a billing change (a plan upgrade, a cancellation), use Bridge **webhooks** rather than
   polling.
 
