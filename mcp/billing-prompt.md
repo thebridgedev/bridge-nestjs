@@ -6,6 +6,23 @@ You are adding **server-side billing enforcement** to a NestJS application that 
 
 Team/workspace management is likewise out of scope — the backend surface is read-only and exposes no team CRUD. Member management is driven from the frontend plugin and bridge-api.
 
+## Decide first — gating, reading, or configuring?
+
+Three unrelated jobs land in this one guide, on three different surfaces. Confusing them is the usual wrong turn — most of all writing application code for something that is platform configuration.
+
+| What you are doing | Surface |
+|---|---|
+| Refuse a whole path unless the tenant is on a plan | `plans: [...]` on a route rule in `BridgeModule.forRoot()` |
+| Refuse a whole path unless the tenant holds an entitlement | `entitlement: '…'` on that same route rule |
+| Gate one capability reachable from several routes, or from a worker | `bridge.fromRequest(req).entitlements.can(key)` |
+| Read the tenant's plan, status, user or branding | `bridge.fromRequest(req).subscription` / `.user` / `.branding` |
+| Meter usage, or read the live quota | `tenant.usage.report(metric, n, key)` / `tenant.usage.quota(metric)` |
+| Create the plans, prices and quotas you gate on | **Not code.** MCP tools or the `bridge` CLI — see **Configuring plans** |
+| Connect Stripe so any of it bills | **Not code.** `connect_stripe` / `setup_payments` (MCP) or `bridge stripe connect` (CLI) |
+| Sell something — checkout, plan selector, Stripe redirect | **Not here at all.** Frontend plugin + bridge-api |
+
+**Prefer an entitlement key to a plan slug.** `plans:` gates on the canonical Billing 2.0 subscription: a workspace with no canonical subscription resolves no slug and is denied 402 whatever plan it is actually on, so on an app not yet migrated to Billing 2.0 a `plans:` rule rejects your entire customer base (TBP-614). Entitlement keys also survive a plan rename; slugs do not. For a per-app plan, gate on a feature flag with a `tenant.plan` rule instead — see `feature-flags-prompt.md`.
+
 ## Prerequisites
 
 1. `@nebulr-group/bridge-nestjs` installed and `BridgeModule.forRoot()` registered (see `integration-prompt.md`).
@@ -62,10 +79,10 @@ There are two layers, declarative and programmatic. Use whichever fits.
 
 | Layer | Where | Best for |
 |---|---|---|
-| **Declarative** — `plans: [...]` on a route rule | `BridgeModule.forRoot` guard config | Whole paths gated by plan tier |
-| **Programmatic** — `BridgeService.fromJwt(jwt).entitlements.can(key)` | Inside a handler/service | Fine-grained per-feature / per-action gates |
+| **Declarative** — `plans: [...]` / `entitlement: '…'` on a route rule | `BridgeModule.forRoot` guard config | Whole paths gated by plan tier or by one entitlement |
+| **Programmatic** — `BridgeService.fromRequest(req).entitlements.can(key)` | Inside a handler/service | Fine-grained per-feature / per-action gates |
 
-### Declarative — plan-restricted routes
+### Declarative — plan- and entitlement-restricted routes
 
 Add `plans` to a route rule; the tenant's subscription plan must be in the list. Combine with a `privilege`:
 
@@ -83,7 +100,15 @@ BridgeModule.forRoot({
 }),
 ```
 
-A caller whose tenant is on `free` hits `/reports/...` and is rejected before the handler runs.
+A caller whose tenant is on `free` hits `/reports/...` and is rejected before the handler runs, with **402 Payment Required** and `reason: 'plan_required'`.
+
+The same rule takes `entitlement`, a key or an array of keys the tenant must hold **all** of — denied with 402 `reason: 'entitlement_missing'`:
+
+```ts
+{ path: '/exports/*', privilege: 'TENANT_WRITE', entitlement: 'data_export' },
+```
+
+Both are **fail-closed**: if the subscription snapshot cannot be resolved, the request is denied. And both read the canonical Billing 2.0 subscription — see the warning in **Decide first** before reaching for `plans`.
 
 ### Programmatic — `BridgeService`
 

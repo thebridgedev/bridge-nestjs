@@ -4,6 +4,26 @@ You are integrating The Bridge into a NestJS application. This adds JWT-based au
 
 This is a **backend** integration: there are no UI components, no login screen, and no checkout redirect. The frontend (a Bridge frontend plugin — svelte/react/nextjs/angular) handles login and obtains the user's access token; this plugin verifies that token on every request and exposes the verified identity to your controllers and resolvers.
 
+## Decide first — how do routes get protected?
+
+Protection here is **declarative**. It lives in `BridgeModule.forRoot()` and in decorators, not in checks you write inside handlers. Make this decision before you touch a controller: retrofitting it means auditing every route in the app.
+
+| You want | Declare it |
+|---|---|
+| Every route protected unless stated otherwise | `guard: { global: true, defaultAccess: 'protected' }` in `BridgeModule.forRoot()` |
+| Only certain controllers protected | leave `guard.global` off, put `@UseGuards(BridgeAuthGuard)` on those controllers |
+| A whole path open to the world | a `rules` entry with `privilege: 'ANONYMOUS'` |
+| One handler open on an otherwise-protected path | `@Public()` on that handler |
+| A path to require a specific privilege | `privilege: '…'` on its `rules` entry |
+| A path to require a plan or an entitlement | `plans: [...]` / `entitlement: '…'` on its `rules` entry — see `billing-prompt.md` |
+| A route to require a role | `@RequireRole()` — decorator only, there is no `role` rule field |
+| A route to require a feature flag | `featureFlag` on the rule, or `@RequireFeatureFlag` / `@RequireFlag` — see `feature-flags-prompt.md` |
+| Only server-to-server callers, or only browser users | `@AcceptAuth('api_token')` / `@AcceptAuth('jwt')` — see `auth-prompt.md` |
+
+**`guard.global` plus `defaultAccess` is the entire switch**, and it is the one choice here with real blast radius. Set `global: true` with `defaultAccess: 'protected'` and a route you forget about is closed; leave the guard off and a route you forget about is open to the internet. Everything else in the table is a per-route correction layered on top of that default.
+
+If the user has not said which they want, default to the global guard and mark exceptions — it fails safe.
+
 ## Prerequisites
 
 - **appId** — your Bridge application ID. Get it from `bridge app get` or the Bridge dashboard.
@@ -117,13 +137,17 @@ BridgeModule.forRoot({
 }),
 ```
 
-**RouteRule schema** (`{ path?, graphqlOperation?, privilege, plans? }`):
+**RouteRule schema** (`{ path?, graphqlOperation?, privilege, plans?, entitlement?, featureFlag? }`):
 - `path` — REST URL wildcard pattern. `*` matches a path segment: `/cards/*` matches `/cards/123`, `/cards/search`, etc.
 - `graphqlOperation` — GraphQL operation name (case-sensitive camelCase, e.g. `'listUsers'`). Provide `path`, `graphqlOperation`, or both.
 - `privilege` — the required `RoutePrivilege` (see below).
-- `plans` — optional plan restriction; the tenant's subscription plan must be in this list.
+- `plans` — optional plan restriction; the tenant's subscription plan slug must be in this list, else 402.
+- `entitlement` — optional entitlement key or array of keys; the tenant must hold **all** of them, else 402.
+- `featureFlag` — optional flag requirement (`'key'`, `{ any: [...] }` or `{ all: [...] }`); a disabled flag denies with 403.
 
-> The rule object carries **privilege and plan only**. There are no `public`, `role`, `featureFlag`, or `methods` fields — role gating is done with `@RequireRole`, flag gating with `@RequireFlag` / `@RequireFeatureFlag`, on the controller or handler.
+> The rule object carries **`privilege`, `plans`, `entitlement` and `featureFlag`** — and nothing else. There are no `public`, `role`, or `methods` fields: public is `privilege: 'ANONYMOUS'` (or `@Public()`), and role gating is decorator-only (`@RequireRole`).
+>
+> `plans` and `entitlement` gate on the canonical Billing 2.0 subscription, which is a different system from a per-app `tenant.plan`. Read the caveat in `billing-prompt.md` before using either.
 
 **Alternative:** the `@Public()` decorator marks an individual controller or handler public and overrides any rule. Prefer the centralized `rules` config for consistency, and reach for `@Public()` when you need a single handler on an otherwise-protected path (e.g. a public `GET` next to a protected `POST` on the same route).
 
@@ -255,7 +279,7 @@ Feature flags gate behavior behind a switch you control from the Bridge dashboar
 
 ## Billing and entitlements
 
-Read tenant data (subscription, entitlements, branding) with `BridgeService` and gate features server-side via `BridgeService.fromJwt(jwt)` or the `plans` field on a route rule. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
+Read tenant data (subscription, entitlements, branding) with `BridgeService` and gate features server-side via `BridgeService.fromRequest(req)` (behind `BridgeAuthGuard`) or the `plans` / `entitlement` fields on a route rule. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
 
 ## Environment variables
 

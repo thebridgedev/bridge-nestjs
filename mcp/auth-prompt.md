@@ -4,6 +4,26 @@ You are wiring **backend authentication and access control** into a NestJS appli
 
 All JWT and API-token verification is delegated to `@nebulr-group/bridge-auth-core/backend` (`JwksService`). The plugin does no local `jose` verification — it fetches the JWKS, verifies the signature (PS256), checks issuer/audience, and transforms the claims into `BridgeUser` / `ApiTokenClaims`.
 
+## Decide first — which check do you need?
+
+Every gate below is **declarative**: a guard plus decorators, not logic inside the handler. They are not interchangeable, and picking the wrong one usually fails open rather than loudly.
+
+| The question you are asking | The check | Denial |
+|---|---|---|
+| Is this caller authenticated at all? | `BridgeAuthGuard` — globally via `guard.global: true`, or `@UseGuards(BridgeAuthGuard)` | 401 |
+| Which credential may call this route? | `@AcceptAuth('jwt')` / `@AcceptAuth('api_token')` — default accepts both | 401 |
+| Does an **API token** hold a privilege? | `@RequirePrivilege('…')`, or `privilege:` on a route rule | 403 |
+| Is the user in a given role? | `@RequireRole('…')` — decorator only, there is no `role` rule field | 403 |
+| Should this one handler skip auth? | `@Public()`, or a `privilege: 'ANONYMOUS'` rule | — |
+| I am outside a request — socket hook, queue consumer, middleware | `JwksService.verifyToken` / `.verifyApiToken` directly | `TokenVerificationError` |
+
+Two of these fail open, which is why this table comes before the steps:
+
+- **`@RequirePrivilege` does not gate user JWTs.** It enforces the `privileges` claim on **API tokens** only; a browser user passes it unconditionally, by design (Step 4). If you meant "this user may not do this", you want `@RequireRole` or your own check — this decorator will let every signed-in user straight through.
+- **Every decorator here is inert without the guard.** `@RequireRole`, `@RequirePrivilege` and `@AcceptAuth` only set metadata that `BridgeAuthGuard` reads. On a route the guard never runs on they are decoration, and the route is unprotected while looking protected.
+
+If the user has not said which credential a route serves, ask. It changes the decorators *and* where the handler reads the tenant from.
+
 ## Prerequisites
 
 Verify Bridge is set up in this project:
