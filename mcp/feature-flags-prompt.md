@@ -199,7 +199,7 @@ Bridge exposes flag configuration over **two channels an agent can drive**, and 
 
 | | Channel | Surface |
 |---|---|---|
-| **MCP** | Bridge MCP server | `list_feature_flags`, `create_feature_flag`, `update_feature_flag`, `toggle_feature_flag` |
+| **MCP** | Bridge MCP server | `list_feature_flags`, `get_flag`, `create_feature_flag`, `update_feature_flag`, `toggle_feature_flag` — plus evaluate / delete / schedule / export / import, below |
 | **CLI** | `bridge` | `bridge flag list \| get \| create \| update \| toggle \| eval` |
 
 **Use whichever you actually have.** If the user asked for a specific one, use that one — no reason to argue, both reach the same API. If you have both and the user expressed no preference, either is correct; pick one and stay on it for the whole task so you aren't reasoning about two views of the same state.
@@ -246,14 +246,22 @@ For anything beyond plain on/off — rewriting the rule, changing values or `val
 
 Inspect current state with `list_feature_flags` (MCP) or `bridge flag list` / `bridge flag get <key>` (CLI).
 
-**Gaps — where MCP has nothing today.** Say so rather than improvising:
+**The rest of the surface — both channels have it.** Neither is a subset of the other; don't send the user to the CLI or the dashboard for any of these:
 
-- **`bridge flag eval` has no MCP equivalent.** There is no tool that dry-runs a rule against a synthetic context. Over MCP, verify by reading the stored rule back with `list_feature_flags` and checking it says what you meant; the real verdict then comes from issuing a request against the running app. If you need the dry-run itself, that is a CLI-only capability:
-  ```bash
-  bridge flag eval enterprise-export --identity user-123 --attribute tenant.plan=pro   # → true
-  bridge flag eval enterprise-export --identity user-123 --attribute tenant.plan=free  # → false
-  ```
-- **Deleting a flag, scheduling a state change, and bulk export/import are CLI-only** (`bridge flag delete`, `bridge flag schedule set|clear`, `bridge flag export|import`). No MCP tools exist for these.
+| Operation | MCP tool | CLI |
+|---|---|---|
+| Dry-run a rule against a synthetic context | `evaluate_feature_flag` | `bridge flag eval` |
+| Delete a flag (irreversible, needs confirmation) | `delete_feature_flag` | `bridge flag delete` |
+| Schedule a future state transition | `set_flag_schedule` | `bridge flag schedule set` |
+| Cancel a scheduled transition | `clear_flag_schedule` | `bridge flag schedule clear` |
+| Bulk export / import | `export_feature_flags`, `import_feature_flags` | `bridge flag export`, `bridge flag import` |
+
+```bash
+bridge flag eval enterprise-export --identity user-123 --attribute tenant.plan=pro   # → true
+bridge flag eval enterprise-export --identity user-123 --attribute tenant.plan=free  # → false
+```
+
+`evaluate_feature_flag` takes `key`, `identity` and `attributes` and runs the live config through the same evaluator the server and the SDKs use, so its verdict is what the app would see. Writing nothing, it is the cheap way to check targeting before you ship code that depends on it. A rule with `rolloutPct < 100` needs an `identity` to bucket on.
 
 ## Step 4 — Feed the rule its inputs (eval context)
 
@@ -343,7 +351,7 @@ Also not supported: there is no `refresh()` on `BridgeFlagsService`, and no auto
 5. **Flip it on.** `toggle_feature_flag { key: 'demo-flag', enabled: true }` (MCP), or `bridge flag toggle --id <id> --enabled true` / `bridge flag update --id <id> --state on` with the id from step 4 (CLI). Dashboard only if you have neither.
 6. **Observe the change.** Re-run the same two curls: **200**, and `{"demo-flag":true}` — with no redeploy and no restart, because the change arrived over the channel.
 7. **Flip it back off** and confirm both revert.
-8. **Targeting (if you wrote a rule).** On the CLI, `bridge flag eval <key> --identity user-123 --attribute tenant.plan=pro`; over MCP, re-read the rule with `list_feature_flags` (there is no eval tool). Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
+8. **Targeting (if you wrote a rule).** Dry-run it: `evaluate_feature_flag { key, identity: 'user-123', attributes: { 'tenant.plan': 'pro' } }` over MCP, or `bridge flag eval <key> --identity user-123 --attribute tenant.plan=pro` on the CLI. Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
 
 ---
 

@@ -45,19 +45,20 @@ Plans, prices and quotas are **platform configuration**, not application code. B
 | Operation | MCP tool | CLI |
 |---|---|---|
 | List plans (with prices + quotas) | `list_plans` | `bridge plan list` |
-| Inspect one plan | — read it out of `list_plans` | `bridge plan get <key>` |
+| Inspect one plan | `get_plan` | `bridge plan get <key>` |
 | Create a plan | `create_plan` | `bridge plan create --key <k> --name <n>` |
 | Rename / re-describe a plan | `update_plan` | `bridge plan update --key <k> --name <n>` |
 | Add or replace a recurring price | `set_plan_price` | `bridge plan price set <key> --amount <n> --interval <i>` |
 | Remove a price | `remove_plan_price` | `bridge plan price rm <key> --interval <i>` |
 | Add or replace a usage quota | `set_plan_quota` | `bridge plan quota set <key> --metric <m> --limit <n> --policy <p>` |
 | Remove a quota | `remove_plan_quota` | `bridge plan quota rm <key> --metric <m>` |
-| List a plan's quotas | — in `list_plans` output | `bridge plan quota list <key>` |
-| **Connect Stripe** | **none — human step** | `bridge stripe connect` |
+| List a plan's quotas | `list_plan_quotas` | `bridge plan quota list <key>` |
+| Check Stripe is connected | `get_stripe_status` | `bridge stripe status` |
+| **Connect Stripe** | `connect_stripe`, or `setup_payments` for the whole flow | `bridge stripe connect` |
 
 **Use whichever you actually have.** If the user asked for a specific one, use that one — no reason to argue, both reach the same API. If you have both and the user expressed no preference, either is correct; pick one and stay on it for the whole task.
 
-The **dashboard is a last resort**, not a third equal option. Only walk the user through the UI when neither MCP nor CLI is available *and* they don't want to install one — or for Stripe, which has no MCP path at all.
+The **dashboard is a last resort**, not a third equal option. Only walk the user through the UI when neither MCP nor CLI is available *and* they don't want to install one — or when the user would rather not paste a live Stripe secret key into a chat, which is the one honest reason to send them to the UI for `connect_stripe`.
 
 ### The common shape: free hard cap + premium metered overage
 
@@ -285,7 +286,7 @@ Normally you don't call this — the 30s TTL keeps state fresh. Backend code sho
 ## Checklist
 
 - [ ] `list_plans` / `bridge plan list` returns at least one plan (plans configured via the frontend/master billing flow)
-- [ ] Stripe is connected on the app (`bridge stripe status`) — no MCP tool exists for connecting it; that's a human step
+- [ ] Stripe is connected on the app — `get_stripe_status` (MCP) or `bridge stripe status` (CLI); if it isn't, `connect_stripe` / `setup_payments` or `bridge stripe connect` does it, with keys the user supplies
 - [ ] No checkout / paywall / Stripe client code added to the backend — purchasing stays in the frontend + bridge-api
 - [ ] Tier-gated paths use `plans: [...]` on the route rule (with a `privilege`)
 - [ ] Capability gates use `BridgeService.fromJwt(jwt).entitlements.can(key)` and fail closed
