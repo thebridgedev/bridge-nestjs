@@ -29,7 +29,7 @@ Continuing the [enterprise example](/auth/roles/common-setups/): a flag `beta_re
 
 ## Feature Flags 2.0 (`BridgeFlagsService` / `@RequireFlag`): wiring is explicit
 
-The newer, synchronous flags module (`@nebulr-group/bridge-nestjs/flags`; see [Feature Flags](/feature-flags/feature-flags/)) evaluates **locally, in-process**, against whatever context you hand it. This is the one real backend-vs-frontend difference worth knowing: nothing about role or privilege reaches the evaluator automatically here. A server process isn't "a user," so the SDK never assumes an identity, and it never reaches into `req.bridgeUser` on its own. You either pass identity per call, or you register an attribute provider that does the reading for you.
+The newer, synchronous flags module (`@nebulr-group/bridge-nestjs/flags`; see [Feature Flags](/feature-flags/)) evaluates **locally, in-process**, against whatever context you hand it. This is the one real backend-vs-frontend difference worth knowing: nothing about role or privilege reaches the evaluator automatically here. A server process isn't "a user," so the SDK never assumes an identity, and it never reaches into `req.bridgeUser` on its own. You either pass identity per call, or you register an attribute provider that does the reading for you.
 
 **Per-call identity, no role targeting:**
 
@@ -60,7 +60,7 @@ this.flags.bridge.registerAttributeProvider(
 );
 ```
 
-Once registered, a rule against `bridge:user.role` or `bridge:tenant.plan` resolves the same way it would if it had been decoded automatically. The difference from the frontend (and from the legacy flag path above) is that here *you* wired the provider in, rather than it being implicit. This also means it's on you to make sure `getClaims()` reads from a verified source (`req.bridgeUser`/`req.bridgeApiToken`, set by `BridgeAuthGuard`) and never from anything client-supplied: the same "never trust client-sent role/plan attributes" rule called out in [Feature Flags](/feature-flags/feature-flags/#bridge-managed-attributes) applies here.
+Once registered, a rule against `bridge:user.role` or `bridge:tenant.plan` resolves the same way it would if it had been decoded automatically. The difference from the frontend (and from the legacy flag path above) is that here *you* wired the provider in, rather than it being implicit. This also means it's on you to make sure `getClaims()` reads from a verified source (`req.bridgeUser`/`req.bridgeApiToken`, set by `BridgeAuthGuard`) and never from anything client-supplied: the same "never trust client-sent role/plan attributes" rule called out in [Feature Flags](/feature-flags/#bridge-managed-attributes) applies here.
 
 **Gating a whole route on a flag**, independent of whether the flag's rule references role at all:
 
