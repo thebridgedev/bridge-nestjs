@@ -54,7 +54,7 @@ export class ItemsController {
 }
 ```
 
-Given that, a token minted for workspace A cannot be used to read or write workspace B's data through an endpoint built this way. Not because the guard blocks it, but because there's no code path that would ever look up workspace B using workspace A's token. The failure mode to watch for is the opposite: an endpoint that reads a `tenantId` from `@Body()`/`@Param()`/a header instead of `@CurrentUser().tenantId` reopens exactly this hole. See [Multi-tenancy patterns](/multi-tenancy/multi-tenancy/) for concrete data-separation strategies (column-based, schema-based, JIT/webhook provisioning) that build on this.
+Given that, a token minted for workspace A cannot be used to read or write workspace B's data through an endpoint built this way. Not because the guard blocks it, but because there's no code path that would ever look up workspace B using workspace A's token. The failure mode to watch for is the opposite: an endpoint that reads a `tenantId` from `@Body()`/`@Param()`/a header instead of `@CurrentUser().tenantId` reopens exactly this hole. See [Multi-tenancy patterns](/multi-tenancy/) for concrete data-separation strategies (column-based, schema-based, JIT/webhook provisioning) that build on this.
 
 ## Role is per-workspace too
 

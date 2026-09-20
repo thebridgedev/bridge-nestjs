@@ -37,7 +37,7 @@ interface ApiTokenClaims {
 ```
 
 - **`privileges`**: the exact set the token was created with; it can never do more than this list allows. This is the same privilege-key vocabulary your [roles](/auth/roles/how-it-works/) use (`USER_READ`, `TENANT_WRITE`, or a custom key).
-- **`tenantId`**: `null` for an app-level token not tied to a specific workspace; a real ID for a workspace-scoped token. See [Multi-tenancy](/auth/multi-tenancy/multi-tenancy/) for what that means for your endpoints.
+- **`tenantId`**: `null` for an app-level token not tied to a specific workspace; a real ID for a workspace-scoped token. See [Multi-tenancy](/auth/multi-tenancy/) for what that means for your endpoints.
 - **`type: 'api'`**: verified explicitly; a token missing this or carrying the wrong value fails with `TOKEN_INVALID` even if it's otherwise active (guards against a user-JWT-shaped token being replayed on the API-token path).
 - **`appId`** must match your app's configured `appId` exactly, or verification fails with `APP_MISMATCH`: a token minted for a different Bridge app is rejected outright, even when Bridge reports it active.
 
