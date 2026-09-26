@@ -1,0 +1,16 @@
+name: PR gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: thebridgedev/auth-core/.github/workflows/merge-gate.yml@main
+    with:
+      # npm, no tracked lockfile: prove every pinned version resolves.
+      working-directory: bridge-nestjs
+      install-command: npm install --no-package-lock --ignore-scripts --no-audit --no-fund
