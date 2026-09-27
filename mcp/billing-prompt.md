@@ -2,6 +2,8 @@
 
 You are adding **server-side billing enforcement** to a NestJS application that uses The Bridge.
 
+`bridge guide mechanisms` is the one-page model: the server decides and the client decorates, a POST increments the limit, counter vs gauge in one sentence, and the three ways a frontend shows a limit.
+
 > **What "billing" means on the backend.** A backend plugin **reads** subscription state and **enforces** entitlements — nothing more. There is no checkout, no paywall, no plan-selector, and no Stripe redirect here. Purchasing lives entirely in the **frontend** Bridge plugin (the plan selector + Stripe Checkout) and in **bridge-api** (Stripe webhooks that sync plan/subscription state). This guide covers two things only: (1) reading the current tenant's subscription, and (2) gating server behavior on the tenant's plan and entitlements. Do not add purchasing, checkout URLs, or Stripe client code to the backend. It also documents how to **configure** the plans, prices and quotas you gate on — that is platform configuration done over MCP or the CLI, not code you write into the app.
 
 Team/workspace management is likewise out of scope — the backend surface is read-only and exposes no team CRUD. Member management is driven from the frontend plugin and bridge-api.
@@ -82,7 +84,7 @@ Two `set_plan_quota` calls on the same metric, differing only in `policy`:
 
 The server is authoritative; the frontend's quota display is decoration. Anyone can call your API directly, so the limit lives on the handler. One decorator checks the limit before the handler runs and records usage after it succeeds — there is nothing else to wire, and a curl call is refused exactly like a click.
 
-Decide one thing per metric: **does deleting it free up room?**
+Decide one thing per metric: **if deleting it frees room, it's a gauge and your app counts it; if it happened, it's a counter and Bridge counts it.**
 
 | | Counter | Gauge |
 |---|---|---|
@@ -154,6 +156,8 @@ and for an entitlement, 403: `{ "statusCode": 403, "code": "ENTITLEMENT_REQUIRED
 > **Every hard quota is also an entitlement** with the same name (dots become `_`), true while `used < limit`. So never pair `@RequireEntitlement('exports')` with `@RequireQuota('exports')`: at the cap it answers 403 before the quota can answer the 402 your frontend knows how to upsell. Use `@RequireEntitlement` for a capability (`app_active`, a feature key), `@RequireQuota` for the limit.
 
 > **Seats** (`users`) are a gauge Bridge keeps itself from workspace membership. `@RequireQuota('users')` on your invite handler checks the seat limit and writes nothing.
+
+> **A plan feature is a `hard` quota nothing counts.** There is no separate entitlement setting: `bridge plan quota set pro --metric analytics --limit 1 --policy hard` makes `analytics` true on `pro`, and a plan without it answers false. Gate it with `@RequireEntitlement('analytics')`. `app_active` is always present: true while the subscription is active, trialing, past due or cancelling at period end.
 
 ### Without decorators — `BridgeQuotaService`
 
@@ -304,7 +308,7 @@ Read this before you expose quota to a client. The split is:
 | | |
 |---|---|
 | **Your backend** | Enforces the cap and records usage — `@RequireQuota` / `@SyncQuota`, or `BridgeQuotaService` by hand. |
-| **The frontend** | Reads quota **directly from Bridge** — `useBridge().quota(metric)` in bridge-svelte, or the ready-made `<BridgeQuotaBanner metric="…" />`. |
+| **The frontend** | Reads quota **directly from Bridge** — `useQuota(metric)` in bridge-svelte, or the ready-made `<BridgeQuotaBanner metric="…" />` — and opens its upgrade dialog on your `402` by itself. |
 
 So your API does **not** need a route that relays a `QuotaSnapshot` to your own
 UI, and your frontend should not hand-copy the `QuotaSnapshot` shape into a local

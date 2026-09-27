@@ -268,7 +268,10 @@ What you can read on the returned scope (each field lazily resolves the cached f
 ## Plan limits — `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement`
 
 One decorator on the handler that creates the thing refuses the request at the plan limit and records
-usage after a 2xx. Direct API calls hit the same gate.
+usage after a 2xx — a POST increments the limit, with nothing else to wire. Direct API calls hit the same gate.
+If deleting it frees room, it's a gauge and your app counts it (`current`); if it happened, it's a counter
+and Bridge counts it. [Plan limits](https://github.com/thebridgedev/bridge-nestjs/blob/main/learning/plan-limits/plan-limits.md)
+has the whole model; coding agents get it from `npx @nebulr-group/bridge-cli guide mechanisms`.
 
 ```typescript
 @Controller('tickets')

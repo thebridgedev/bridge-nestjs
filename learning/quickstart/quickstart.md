@@ -10,7 +10,7 @@ npm install @nebulr-group/bridge-nestjs
 
 ## Basic setup
 
-Add `BridgeModule` to your application's root module with your `appId`:
+Two lines in your root module and one environment variable are the whole integration:
 
 ```typescript
 // src/app.module.ts
@@ -18,14 +18,21 @@ import { Module } from '@nestjs/common';
 import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 
 @Module({
-  imports: [
-    BridgeModule.forRoot({
-      appId: 'YOUR_APP_ID',
-    }),
-  ],
+  imports: [BridgeModule.forRoot({ guard: { global: true } })],
 })
 export class AppModule {}
 ```
+
+```env
+# .env
+BRIDGE_APP_ID=your-app-id
+# Only for a stage, local or self-hosted app:
+# BRIDGE_API_BASE_URL=https://api-stage.thebridge.dev
+```
+
+`forRoot()` reads `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG`; an option you pass wins over the environment. With no app id it refuses to start and names the variable. NestJS does not load `.env` itself, so start the app with the variables in its environment, e.g. `node --env-file=.env dist/main.js`. `guard.global: true` protects every route; the next section adds exceptions.
+
+A plan limit is one more decorator on the handler that creates the thing — see [Plan limits](../plan-limits/plan-limits.md).
 
 ## Global guard with route rules
 
@@ -39,8 +46,7 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 @Module({
   imports: [
     BridgeModule.forRoot({
-      appId: 'YOUR_APP_ID',
-      debug: true, // Enable for development
+      debug: true, // Enable for development (or BRIDGE_DEBUG=true)
       guard: {
         global: true,
         defaultAccess: 'protected',
