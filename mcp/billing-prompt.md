@@ -130,6 +130,8 @@ export class TicketsController {
 }
 ```
 
+The first argument of `current` is a `QuotaTenant` (exported from `@nebulr-group/bridge-nestjs`), not the `BridgeTenant` that `@CurrentTenant()` gives a handler: it carries the verified workspace `id` and `userId`. Leave it unannotated as above, or write `(t: QuotaTenant, self: TicketsController) => …`; annotating it as `BridgeTenant` does not compile.
+
 `current` receives the tenant (`t.id` is the verified workspace id, `t.userId`, `t.scope` the full `TenantScope`) and the **controller instance**, so it can reach the controller's injected services. Return your own count — it is what the limit is compared against, so it heals itself if Bridge's copy ever missed an update. There is no decrement and no reservation: every create and delete sends the whole current count.
 
 **What happens, exactly:**
