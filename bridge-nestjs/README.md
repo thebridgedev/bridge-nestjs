@@ -22,9 +22,9 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 
 @Module({
   imports: [
-    BridgeModule.forRoot({
-      appId: 'your-app-id',
-    }),
+    // Reads BRIDGE_APP_ID, BRIDGE_API_BASE_URL and BRIDGE_DEBUG from the environment.
+    // Anything passed here wins: BridgeModule.forRoot({ appId: 'your-app-id' }).
+    BridgeModule.forRoot(),
   ],
 })
 export class AppModule {}
@@ -254,7 +254,8 @@ What you can read on the returned scope (each field lazily resolves the cached f
 | `entitlements.snapshot()` | `Promise<Record<string, boolean>>` |
 | `branding` | `Promise<{ logo, name, ...colors }>` |
 | `user` | `Promise<{ id, email?, role, tenantId }>` |
-| `usage.report(metric, value?, key?)` | `Promise<void>` — report metered usage (TBP-275) |
+| `usage.report(metric, value?, key?)` | `Promise<void>` — report a counter event (TBP-275) |
+| `usage.set(metric, count)` | `Promise<void>` — set a gauge to how many exist right now (TBP-699) |
 | `usage.quota(metric)` | `Promise<QuotaSnapshot \| null>` — live quota incl. metered overage cost |
 | `snapshot()` | `Promise<SessionSnapshotData>` (the full payload) |
 | `invalidate()` | `Promise<void>` — force-refresh the cached snapshot on next access |
@@ -263,6 +264,37 @@ What you can read on the returned scope (each field lazily resolves the cached f
 > checkout or paywall here. Purchase and upgrade flows live in the frontend plugin and bridge-api webhooks.
 > `bridge.tenant(tenantId)` (arbitrary-tenant access for cron/admin paths) is not yet wired and throws a
 > clear error; use `bridge.fromRequest(req)` from a request handler.
+
+## Plan limits — `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement`
+
+One decorator on the handler that creates the thing refuses the request at the plan limit and records
+usage after a 2xx. Direct API calls hit the same gate.
+
+```typescript
+@Controller('tickets')
+export class TicketsController {
+  constructor(private readonly tickets: TicketsService) {}
+
+  @Post()   // gauge: things that exist — your app counts them
+  @RequireQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
+  create() {}
+
+  @Delete(':id')   // no check; sets Bridge's copy of the count after a 2xx
+  @SyncQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
+  remove() {}
+
+  @Post(':id/export')   // counter: things that happened — Bridge counts, keyed by Idempotency-Key
+  @RequireEntitlement('app_active')
+  @RequireQuota('exports')
+  export() {}
+}
+```
+
+- Refusal: `402 { code: 'QUOTA_EXCEEDED', metric, used, limit, fix }` / `403 { code: 'ENTITLEMENT_REQUIRED', entitlement, fix }`.
+  `fix` is `billing.manageRoute` (default `/subscription`).
+- `metered` quotas never refuse. Nothing is recorded for a 4xx/5xx or a thrown handler; exactly one write per metric otherwise.
+- Needs a user verified by `BridgeAuthGuard`; no verified user → 401. Quota/entitlement unreadable → 503 (fail closed).
+- The same calls without decorators: `BridgeQuotaService` — `check`, `assertQuota`, `record`, `sync`, `assertEntitlement`.
 
 ## Decorators
 
@@ -274,6 +306,9 @@ What you can read on the returned scope (each field lazily resolves the cached f
 | `@RequireRole(role)` | Require a role (checked against the user JWT) |
 | `@RequirePrivilege(privilege)` | Require an API-token privilege (user JWTs bypass) |
 | `@AcceptAuth(type)` | Restrict accepted auth type: `'jwt' \| 'api_token' \| 'both'` |
+| `@RequireQuota(metric, { current? })` | Plan limit: 402 at the limit, records usage after a 2xx |
+| `@SyncQuota(metric, { current })` | Sets a gauge to your count after a 2xx (deletes, bulk) |
+| `@RequireEntitlement(key)` | 403 unless the tenant's plan includes `key` |
 | `@RequireFeatureFlag(req)` | Flag gating (single / `{ any }` / `{ all }`) over the Bridge API via `FeatureFlagService` |
 | `@RequireFlag(key, default?, opts?)` | Flag gating via `BridgeFlagGuard`, with live updates (from `/flags`) |
 | `@Flag({ key, defaultValue })` | Param decorator — inject a flag value (from `/flags`) |
@@ -282,12 +317,13 @@ What you can read on the returned scope (each field lazily resolves the cached f
 
 ```typescript
 interface BridgeConfig {
-  // Required
+  // Required — forRoot() falls back to BRIDGE_APP_ID
   appId: string;
 
   // Optional (with defaults)
-  apiBaseUrl?: string;          // default: 'https://api.thebridge.dev'
-  debug?: boolean;              // default: false
+  apiBaseUrl?: string;          // default: BRIDGE_API_BASE_URL, else 'https://api.thebridge.dev'
+  debug?: boolean;              // default: BRIDGE_DEBUG === 'true'
+  billing?: { manageRoute?: string }; // `fix` in quota/entitlement refusals; default '/subscription'
 
   // Verification-endpoint overrides — useful in Docker when the container
   // can't reach the public apiBaseUrl
