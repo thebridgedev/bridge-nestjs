@@ -6,7 +6,10 @@ import { BRIDGE_CONFIG, BridgeConfigService } from './services/bridge-config.ser
 import { FeatureFlagService } from './services/feature-flag.service';
 import { JwksService } from './services/jwks.service';
 import { BridgeHttpService } from './services/bridge-http.service';
-import { BridgeConfig, BridgeModuleAsyncOptions } from './types/config';
+import { BridgeConfig, BridgeModuleAsyncOptions, BridgeModuleConfig } from './types/config';
+// TBP-704 — plan limits and entitlements as decorators.
+import { BridgeQuotaService } from './quota/quota.service';
+import { BridgeQuotaInterceptor } from './quota/quota.interceptor';
 // TBP-341 — unified backend bridge surface.
 import { BRIDGE_PULL_CACHE } from './flags/flags.tokens';
 import { BridgeService } from './bridge/bridge.service';
@@ -19,6 +22,11 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
  * 
  * @example
  * ```typescript
+ * // Zero config: appId / apiBaseUrl / debug come from BRIDGE_APP_ID,
+ * // BRIDGE_API_BASE_URL and BRIDGE_DEBUG.
+ * @Module({ imports: [BridgeModule.forRoot()] })
+ * export class AppModule {}
+ *
  * // Basic usage
  * @Module({
  *   imports: [
@@ -70,10 +78,16 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
 @Module({})
 export class BridgeModule {
   /**
-   * Configure the Bridge module with static configuration
+   * Configure the Bridge module with static configuration.
+   *
+   * TBP-704 — every field is optional. `appId`, `apiBaseUrl` and `debug`
+   * fall back to `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG`
+   * (`'true'` turns it on); a value passed here always wins. Throws when no
+   * app id is found either way, rather than starting up unable to verify a
+   * single token.
    */
-  static forRoot(config: BridgeConfig): DynamicModule {
-    const providers = this.createProviders(config);
+  static forRoot(config: BridgeModuleConfig = {}): DynamicModule {
+    const providers = this.createProviders(resolveBridgeConfig(config));
     
     return {
       module: BridgeModule,
@@ -86,6 +100,8 @@ export class BridgeModule {
         BridgeHttpService,
         BridgeService,
         BRIDGE_PULL_CACHE,
+        BridgeQuotaService,
+        BridgeQuotaInterceptor,
       ],
     };
   }
@@ -108,6 +124,8 @@ export class BridgeModule {
         BridgeHttpService,
         BridgeService,
         BRIDGE_PULL_CACHE,
+        BridgeQuotaService,
+        BridgeQuotaInterceptor,
       ],
     };
   }
@@ -140,6 +158,8 @@ export class BridgeModule {
         useFactory: () => new BridgePullCache({ ttlMs: 30_000 }),
       },
       BridgeService,
+      BridgeQuotaService,
+      BridgeQuotaInterceptor,
     ];
 
     // Add global guard if configured
@@ -203,7 +223,32 @@ export class BridgeModule {
       bridgeOptionsProvider,
       pullCacheProvider,
       BridgeService,
+      BridgeQuotaService,
+      BridgeQuotaInterceptor,
     ];
   }
 }
 
+
+/**
+ * TBP-704 — fill `appId` / `apiBaseUrl` / `debug` from the environment where
+ * the caller left them out. Explicit values win, including an explicit
+ * `debug: false` over `BRIDGE_DEBUG=true`.
+ */
+export function resolveBridgeConfig(
+  config: BridgeModuleConfig = {},
+  env: NodeJS.ProcessEnv = process.env,
+): BridgeConfig {
+  const appId = config.appId || env.BRIDGE_APP_ID;
+  if (!appId) {
+    throw new Error(
+      '[bridge-nestjs] BridgeModule.forRoot() needs an app id: pass `appId` or set BRIDGE_APP_ID.',
+    );
+  }
+  return {
+    ...config,
+    appId,
+    apiBaseUrl: config.apiBaseUrl || env.BRIDGE_API_BASE_URL || undefined,
+    debug: config.debug ?? env.BRIDGE_DEBUG === 'true',
+  };
+}

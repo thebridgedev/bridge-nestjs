@@ -16,6 +16,7 @@ export class BridgeConfigService {
     introspectionUrl: string | undefined;
     introspectionCacheTtlMs: number | undefined;
     userJwksUrl: string | undefined;
+    manageRoute: string;
   };
 
   constructor(@Inject(BRIDGE_CONFIG) config: BridgeConfig) {
@@ -27,6 +28,7 @@ export class BridgeConfigService {
       introspectionUrl: config.introspectionUrl,
       introspectionCacheTtlMs: config.introspectionCacheTtlMs,
       userJwksUrl: config.userJwksUrl,
+      manageRoute: config.billing?.manageRoute || BRIDGE_DEFAULTS.manageRoute,
     };
   }
 
@@ -47,6 +49,14 @@ export class BridgeConfigService {
   /** Derived: ${apiBaseUrl}/cloud-views — used for feature flag evaluation */
   get cloudViewsBaseUrl(): string {
     return `${this.config.apiBaseUrl}/cloud-views`;
+  }
+
+  /**
+   * TBP-704 — the subscription page a refused request points at (`fix` in
+   * 402 `QUOTA_EXCEEDED` / 403 `ENTITLEMENT_REQUIRED` bodies).
+   */
+  get manageRoute(): string {
+    return this.config.manageRoute;
   }
 
   get debug(): boolean {

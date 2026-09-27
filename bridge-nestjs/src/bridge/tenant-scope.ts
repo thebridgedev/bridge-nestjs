@@ -62,6 +62,13 @@ export interface QuotaSnapshot {
   remaining: number;
   warningLevel: null | 'approaching' | 'critical';
   policy: 'hard' | 'metered';
+  /**
+   * TBP-699 — `counter`: `used` is this billing period's sum of reported
+   * events. `gauge`: `used` is how many exist right now (set by the app with
+   * `usage.set`, never reset). Absent from servers that predate gauges, which
+   * only have counters.
+   */
+  kind?: 'counter' | 'gauge';
   /** Per-unit price (metered only). */
   unitAmount?: number;
   currency?: string;
@@ -84,6 +91,17 @@ export interface TenantUsageView {
    * double-reports dedupe server-side.
    */
   report(metric: string, value?: number, idempotencyKey?: string): Promise<void>;
+  /**
+   * TBP-699 — record how many of `metric` exist right now in this tenant's
+   * workspace (a gauge: tickets, projects, stored files). Send the whole
+   * current count every time it changes — there is no decrement, so a missed
+   * or repeated call is corrected by the next one.
+   *
+   * Unlike `report`, this is not best-effort: it resolves once Bridge stored
+   * the value and rejects on an invalid value or a non-2xx answer. `users`
+   * (seats) is kept by Bridge from membership and cannot be set.
+   */
+  set(metric: string, value: number): Promise<void>;
   /** Live quota snapshot for a metric (or null when no quota is configured). */
   quota(metric: string): Promise<QuotaSnapshot | null>;
 }
@@ -148,11 +166,12 @@ export class TenantScope {
     };
   }
 
-  /** Lazy: the usage slice — `report(metric)` + `quota(metric)`. */
+  /** Lazy: the usage slice — `report(metric)`, `set(metric, value)` + `quota(metric)`. */
   get usage(): TenantUsageView {
     return {
       report: (metric, value = 1, idempotencyKey?) =>
         this._reportUsage(metric, value, idempotencyKey),
+      set: (metric, value) => this._setGauge(metric, value),
       quota: (metric) => this._fetchQuota(metric),
     };
   }
@@ -201,6 +220,31 @@ export class TenantScope {
       });
     } catch {
       // Best-effort — usage reporting must never break the request path.
+    }
+  }
+
+  private async _setGauge(metric: string, value: number): Promise<void> {
+    if (typeof metric !== 'string' || metric.length === 0) {
+      throw new TypeError('[bridge-nestjs] usage.set() needs a metric name');
+    }
+    if (!Number.isInteger(value) || value < 0) {
+      throw new RangeError(
+        `[bridge-nestjs] usage.set('${metric}', ${String(value)}): value must be an integer >= 0 — the current count, not a change`,
+      );
+    }
+    await this.cacheKey; // rejects for an unverifiable token — nothing is sent
+    const url = `${this.apiBaseUrl.replace(/\/+$/, '')}/usage/gauge/${encodeURIComponent(metric)}`;
+    const res = await this.fetcher(url, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${this.userJwt}`,
+        'x-app-id': this.appId,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      throw new Error(`[bridge-nestjs] PUT /usage/gauge/${metric} failed: ${res.status}`);
     }
   }
 
