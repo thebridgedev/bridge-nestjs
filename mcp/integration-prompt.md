@@ -4,6 +4,28 @@ You are integrating The Bridge into a NestJS application. This adds JWT-based au
 
 This is a **backend** integration: there are no UI components, no login screen, and no checkout redirect. The frontend (a Bridge frontend plugin — svelte/react/nextjs/angular) handles login and obtains the user's access token; this plugin verifies that token on every request and exposes the verified identity to your controllers and resolvers.
 
+**The whole integration is two lines in `AppModule` and one environment variable.** A plan limit is one more decorator per handler (`bridge guide nestjs billing`). `bridge guide mechanisms` explains the model: the server decides, the client decorates, and a POST increments the limit.
+
+```ts
+// src/app.module.ts
+import { Module } from '@nestjs/common';
+import { BridgeModule } from '@nebulr-group/bridge-nestjs';
+
+@Module({
+  imports: [BridgeModule.forRoot({ guard: { global: true } })],
+})
+export class AppModule {}
+```
+
+```env
+# .env
+BRIDGE_APP_ID=your-app-id
+# Only for a stage, local or self-hosted app:
+# BRIDGE_API_BASE_URL=https://api-stage.thebridge.dev
+```
+
+NestJS does not read `.env` by itself, and `BridgeModule.forRoot()` reads the environment when `AppModule` is loaded, so the variables must be in the process before it starts: `node --env-file=.env dist/main.js` (Node 20.6+), your container's environment, or `forRootAsync` with `@nestjs/config` (below).
+
 ## Decide first — how do routes get protected?
 
 Protection here is **declarative**. It lives in `BridgeModule.forRoot()` and in decorators, not in checks you write inside handlers. Make this decision before you touch a controller: retrofitting it means auditing every route in the app.
@@ -63,7 +85,7 @@ npm i @nebulr-group/bridge-nestjs
 
 Replace `npm i` with the project's package manager (`bun add`, `pnpm add`, `yarn add`).
 
-`@nebulr-group/bridge-auth-core` is pulled in automatically as a transitive dependency — do **not** install it directly. All JWT and API-token verification is delegated to auth-core's `JwksService`; this plugin does no local `jose` verification of its own.
+`@nebulr-group/bridge-auth-core` is a peer dependency that npm, pnpm and bun install with it; there is no second package to add by hand. All JWT and API-token verification is delegated to auth-core's `JwksService`.
 
 Peer dependencies (already present in any NestJS project):
 - `@nestjs/common` (^10.0.0 || ^11.0.0)
@@ -79,12 +101,7 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 
 @Module({
   imports: [
-    BridgeModule.forRoot({
-      guard: {
-        global: true,
-        defaultAccess: 'protected',
-      },
-    }),
+    BridgeModule.forRoot({ guard: { global: true } }),
     // ... your other modules
   ],
 })
@@ -92,9 +109,9 @@ export class AppModule {}
 ```
 
 **Key points:**
-- `appId`, `apiBaseUrl` and `debug` are read from `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG` (`'true'`) when not passed; a value passed to `forRoot()` wins. With no app id either way, startup fails with a clear error. `forRootAsync` reads only what its factory returns.
+- `appId`, `apiBaseUrl` and `debug` are read from `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG` (`'true'`) when not passed; a value passed to `forRoot()` wins. With no app id either way, startup fails with a clear error naming `BRIDGE_APP_ID`. `forRootAsync` reads only what its factory returns.
 - `guard.global: true` registers `BridgeAuthGuard` as an `APP_GUARD`, so it runs on every route automatically.
-- `defaultAccess: 'protected'` means any route without a matching rule requires a valid token.
+- `defaultAccess` is `'protected'` unless you say otherwise: any route without a matching rule requires a valid token.
 - The module fetches the JWKS and verifies JWTs internally (PS256). User JWTs verify against `{apiBaseUrl}/auth/.well-known/jwks.json`; API tokens against `{apiBaseUrl}/auth/account/app/.well-known/jwks.json`.
 - `apiBaseUrl` defaults to `https://api.thebridge.dev`.
 
@@ -291,7 +308,7 @@ BRIDGE_APP_ID=your-app-id-here
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `BRIDGE_APP_ID` | Yes | — | Your Bridge application ID |
-| `BRIDGE_API_BASE_URL` | No | `https://api.thebridge.dev` | Bridge API base URL |
+| `BRIDGE_API_BASE_URL` | For a stage, local or self-hosted app | `https://api.thebridge.dev` (production) | Bridge API base URL |
 | `BRIDGE_DEBUG` | No | `false` | Enable debug logging |
 
 ## Verify the integration

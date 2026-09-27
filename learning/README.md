@@ -9,6 +9,7 @@ Documentation for The Bridge NestJS plugin: authentication, privilege-based acce
 - [Authentication and access control](./auth/auth.md)
 - [Configuration](./configuration/configuration.md)
 - [Feature flags](./feature-flags/feature-flags.md)
+- [Plan limits and entitlements](./plan-limits/plan-limits.md): one decorator per handler; counter vs gauge
 - [Tenant data via `BridgeService`](./bridge-service/bridge-service.md): subscription, entitlements, and branding for the current request
 - [Multi-tenancy](./multi-tenancy/multi-tenancy.md)
 - [Frontend integration](./frontend-integration/frontend-integration.md)
