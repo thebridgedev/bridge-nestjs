@@ -13,6 +13,30 @@ export { RequireFeatureFlag, REQUIRED_FEATURE_FLAG_KEY } from './decorators/requ
 export { RequirePrivilege, REQUIRED_PRIVILEGE_KEY } from './decorators/require-privilege.decorator';
 export { AcceptAuth, ACCEPT_AUTH_KEY, type AuthType } from './decorators/accept-auth.decorator';
 
+// TBP-704 — plan limits and entitlements as decorators, and as plain service calls.
+export {
+  RequireQuota,
+  SyncQuota,
+  RequireEntitlement,
+  REQUIRED_QUOTA_KEY,
+  SYNC_QUOTA_KEY,
+  REQUIRED_ENTITLEMENT_KEY,
+  BridgeQuotaInterceptor,
+  BridgeQuotaService,
+  QuotaExceededException,
+  EntitlementRequiredException,
+  type QuotaTenant,
+  type QuotaCounter,
+  type RequireQuotaOptions,
+  type SyncQuotaOptions,
+  type QuotaExceededBody,
+  type EntitlementRequiredBody,
+  type QuotaCount,
+  type QuotaCheckOptions,
+  type QuotaDecision,
+  type QuotaRecordOptions,
+} from './quota';
+
 // Services
 export { BridgeConfigService, BRIDGE_CONFIG } from './services/bridge-config.service';
 export { JwksService, TokenVerificationError } from './services/jwks.service';
@@ -38,6 +62,8 @@ export {
 // Types
 export type {
   BridgeConfig,
+  BridgeModuleConfig,
+  BillingConfig,
   BridgeModuleAsyncOptions,
   GuardConfig,
   RouteRule,
