@@ -14,13 +14,15 @@ Every gate below is **declarative**: a guard plus decorators, not logic inside t
 | Which credential may call this route? | `@AcceptAuth('jwt')` / `@AcceptAuth('api_token')` — default accepts both | 401 |
 | Does an **API token** hold a privilege? | `@RequirePrivilege('…')`, or `privilege:` on a route rule | 403 |
 | Is the user in a given role? | `@RequireRole('…')` — decorator only, there is no `role` rule field | 403 |
+| Does the tenant's plan include a capability? | `@RequireEntitlement('…')` — see `billing-prompt.md` | 403 `ENTITLEMENT_REQUIRED` |
+| Is the tenant under its plan limit for the thing this handler creates? | `@RequireQuota('…')` (+ `@SyncQuota` on the delete) — see `billing-prompt.md` | 402 `QUOTA_EXCEEDED` |
 | Should this one handler skip auth? | `@Public()`, or a `privilege: 'ANONYMOUS'` rule | — |
 | I am outside a request — socket hook, queue consumer, middleware | `JwksService.verifyToken` / `.verifyApiToken` directly | `TokenVerificationError` |
 
 Two of these fail open, which is why this table comes before the steps:
 
 - **`@RequirePrivilege` does not gate user JWTs.** It enforces the `privileges` claim on **API tokens** only; a browser user passes it unconditionally, by design (Step 4). If you meant "this user may not do this", you want `@RequireRole` or your own check — this decorator will let every signed-in user straight through.
-- **Every decorator here is inert without the guard.** `@RequireRole`, `@RequirePrivilege` and `@AcceptAuth` only set metadata that `BridgeAuthGuard` reads. On a route the guard never runs on they are decoration, and the route is unprotected while looking protected.
+- **Every decorator here is inert without the guard.** `@RequireRole`, `@RequirePrivilege` and `@AcceptAuth` only set metadata that `BridgeAuthGuard` reads. On a route the guard never runs on they are decoration, and the route is unprotected while looking protected. (`@RequireEntitlement` and `@RequireQuota` are the exception that fails closed: with no user verified by the guard they answer 401 — which on a `@Public()` route means they refuse everyone.)
 
 If the user has not said which credential a route serves, ask. It changes the decorators *and* where the handler reads the tenant from.
 
@@ -49,7 +51,7 @@ If any are missing, run the integration guide (`integration-prompt.md`) first.
 
 ```ts
 BridgeModule.forRoot({
-  appId: process.env.BRIDGE_APP_ID!,
+  // appId comes from BRIDGE_APP_ID when omitted
   guard: {
     global: true,
     defaultAccess: 'protected',

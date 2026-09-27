@@ -16,6 +16,8 @@ Protection here is **declarative**. It lives in `BridgeModule.forRoot()` and in 
 | One handler open on an otherwise-protected path | `@Public()` on that handler |
 | A path to require a specific privilege | `privilege: '…'` on its `rules` entry |
 | A path to require a plan or an entitlement | `plans: [...]` / `entitlement: '…'` on its `rules` entry — see `billing-prompt.md` |
+| A handler to require an entitlement | `@RequireEntitlement('…')` — see `billing-prompt.md` |
+| A plan limit on the handler that creates the thing | `@RequireQuota('…')`, and `@SyncQuota` on the delete for things that exist — see `billing-prompt.md` |
 | A route to require a role | `@RequireRole()` — decorator only, there is no `role` rule field |
 | A route to require a feature flag | `featureFlag` on the rule, or `@RequireFeatureFlag` / `@RequireFlag` — see `feature-flags-prompt.md` |
 | Only server-to-server callers, or only browser users | `@AcceptAuth('api_token')` / `@AcceptAuth('jwt')` — see `auth-prompt.md` |
@@ -78,7 +80,6 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 @Module({
   imports: [
     BridgeModule.forRoot({
-      appId: process.env.BRIDGE_APP_ID!,
       guard: {
         global: true,
         defaultAccess: 'protected',
@@ -91,6 +92,7 @@ export class AppModule {}
 ```
 
 **Key points:**
+- `appId`, `apiBaseUrl` and `debug` are read from `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG` (`'true'`) when not passed; a value passed to `forRoot()` wins. With no app id either way, startup fails with a clear error. `forRootAsync` reads only what its factory returns.
 - `guard.global: true` registers `BridgeAuthGuard` as an `APP_GUARD`, so it runs on every route automatically.
 - `defaultAccess: 'protected'` means any route without a matching rule requires a valid token.
 - The module fetches the JWKS and verifies JWTs internally (PS256). User JWTs verify against `{apiBaseUrl}/auth/.well-known/jwks.json`; API tokens against `{apiBaseUrl}/auth/account/app/.well-known/jwks.json`.
@@ -124,7 +126,6 @@ Declare public routes in the `rules` array using `privilege: 'ANONYMOUS'`. This 
 
 ```ts
 BridgeModule.forRoot({
-  appId: process.env.BRIDGE_APP_ID!,
   guard: {
     global: true,
     defaultAccess: 'protected',
@@ -279,7 +280,7 @@ Feature flags gate behavior behind a switch you control from the Bridge dashboar
 
 ## Billing and entitlements
 
-Read tenant data (subscription, entitlements, branding) with `BridgeService` and gate features server-side via `BridgeService.fromRequest(req)` (behind `BridgeAuthGuard`) or the `plans` / `entitlement` fields on a route rule. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
+Read tenant data (subscription, entitlements, branding) with `BridgeService` and gate features server-side via `BridgeService.fromRequest(req)` (behind `BridgeAuthGuard`) or the `plans` / `entitlement` fields on a route rule. Plan limits are one decorator on the handler — `@RequireQuota` / `@SyncQuota` — and capabilities `@RequireEntitlement`. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
 
 ## Environment variables
 

@@ -5,18 +5,15 @@ import { ItemsController } from './items/items.controller';
 import { AdminController } from './admin/admin.controller';
 import { BetaController } from './beta/beta.controller';
 import { ForwardController } from './forward/forward.controller';
+import { TicketsController } from './tickets/tickets.controller';
+import { TicketsService } from './tickets/tickets.service';
 
 @Module({
   imports: [
     BridgeModule.forRoot({
-      // `apiBaseUrl` is the single base the plugin derives auth + account URLs
-      // from. This file previously passed `authBaseUrl` / `backendlessBaseUrl`,
-      // neither of which exists on BridgeConfig — so the demo (and every e2e
-      // suite that boots it) failed to compile, and had it compiled the ignored
-      // override would have silently left apiBaseUrl on its production default.
-      appId: process.env.BRIDGE_APP_ID || 'demo-app-id',
-      apiBaseUrl: process.env.BRIDGE_API_BASE_URL,
-      debug: process.env.BRIDGE_DEBUG === 'true',
+      // `appId`, `apiBaseUrl` and `debug` come from BRIDGE_APP_ID,
+      // BRIDGE_API_BASE_URL and BRIDGE_DEBUG — forRoot() reads them when they
+      // are not passed (TBP-704). Pass them here to override the environment.
       guard: {
         global: true,
         defaultAccess: 'protected',
@@ -42,7 +39,15 @@ import { ForwardController } from './forward/forward.controller';
       },
     }),
   ],
-  controllers: [AppController, ItemsController, AdminController, BetaController, ForwardController],
+  controllers: [
+    AppController,
+    ItemsController,
+    AdminController,
+    BetaController,
+    ForwardController,
+    TicketsController,
+  ],
+  providers: [TicketsService],
 })
 export class AppModule {}
 

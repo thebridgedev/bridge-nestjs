@@ -85,4 +85,51 @@ describe('TenantScope.usage (TBP-275)', () => {
     const scope = makeScope(fetcher as unknown as typeof fetch);
     expect(await scope.usage.quota('none')).toBeNull();
   });
+
+  // TBP-699/704 — gauges: the absolute current count, PUT, never queued.
+  it('set PUTs the absolute value to /usage/gauge/:metric with auth headers', async () => {
+    const fetcher = jest.fn(async () => okJson({ metric: 'tickets', value: 4 }));
+    const scope = makeScope(fetcher as unknown as typeof fetch);
+
+    await scope.usage.set('tickets', 4);
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://api.test/usage/gauge/tickets');
+    expect(init.method).toBe('PUT');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer jwt-1');
+    expect((init.headers as Record<string, string>)['x-app-id']).toBe('app-1');
+    expect(JSON.parse(init.body as string)).toEqual({ value: 4 });
+  });
+
+  it('set encodes the metric and accepts 0 (everything deleted)', async () => {
+    const fetcher = jest.fn(async () => okJson({}));
+    await makeScope(fetcher as unknown as typeof fetch).usage.set('storage/bytes', 0);
+    expect((fetcher.mock.calls[0] as unknown as [string])[0]).toBe('https://api.test/usage/gauge/storage%2Fbytes');
+  });
+
+  it.each([-1, 1.5, NaN])('set rejects %p without calling Bridge — it is a count, not a change', async (value) => {
+    const fetcher = jest.fn(async () => okJson({}));
+    await expect(makeScope(fetcher as unknown as typeof fetch).usage.set('tickets', value)).rejects.toThrow(RangeError);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('set rejects on a non-2xx answer (unlike report, it is not best-effort)', async () => {
+    const fetcher = jest.fn(async () => okJson({ message: 'no' }, 400));
+    await expect(makeScope(fetcher as unknown as typeof fetch).usage.set('users', 3)).rejects.toThrow(/400/);
+  });
+
+  it('set sends nothing for an unverifiable token', async () => {
+    const fetcher = jest.fn(async () => okJson({}));
+    const scope = new TenantScope(
+      JWT,
+      Promise.reject(new Error('unverified')),
+      new BridgePullCache({ ttlMs: 30_000 }),
+      API,
+      APP,
+      fetcher as unknown as typeof fetch,
+    );
+    await expect(scope.usage.set('tickets', 1)).rejects.toThrow('unverified');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
 });

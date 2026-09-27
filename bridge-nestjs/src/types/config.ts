@@ -145,7 +145,32 @@ export interface BridgeConfig {
    * @default {apiBaseUrl}/auth/.well-known/jwks.json
    */
   userJwksUrl?: string;
+
+  /**
+   * Billing settings used by `@RequireQuota` / `@RequireEntitlement` refusals
+   * (TBP-704).
+   */
+  billing?: BillingConfig;
 }
+
+/** TBP-704 — where a refused request tells the user to go to upgrade. */
+export interface BillingConfig {
+  /**
+   * Route of your app's subscription page. Sent as `fix` in 402
+   * `QUOTA_EXCEEDED` and 403 `ENTITLEMENT_REQUIRED` bodies so the frontend
+   * can link the user straight to it.
+   * @default '/subscription'
+   */
+  manageRoute?: string;
+}
+
+/**
+ * TBP-704 — what `BridgeModule.forRoot()` accepts. Everything is optional:
+ * `appId`, `apiBaseUrl` and `debug` fall back to the `BRIDGE_APP_ID`,
+ * `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG` environment variables; a value
+ * passed here always wins over the environment.
+ */
+export type BridgeModuleConfig = Omit<BridgeConfig, 'appId'> & { appId?: string };
 
 /**
  * Async module options for BridgeModule.forRootAsync()
@@ -161,6 +186,7 @@ export interface BridgeModuleAsyncOptions {
  */
 export const BRIDGE_DEFAULTS = {
   apiBaseUrl: 'https://api.thebridge.dev',
+  manageRoute: '/subscription',
   debug: false,
   defaultAccess: 'protected' as const,
 } as const;
