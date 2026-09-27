@@ -129,20 +129,14 @@ const response = await api.get('/items');
 
 ### Using Bridge Svelte
 
+`bridgeFetch` is `fetch` with the user's token attached and one refresh-and-retry on `401`. It also opens the plan-limit upgrade dialog when this backend answers `402 QUOTA_EXCEEDED`:
+
 ```svelte
 <script lang="ts">
-  import { auth } from '@nebulr-group/bridge-svelte';
+  import { bridgeFetch } from '@nebulr-group/bridge-svelte';
 
   async function fetchItems() {
-    const tokens = auth.getToken();
-    if (!tokens?.accessToken) return;
-
-    const response = await fetch('http://localhost:3000/api/items', {
-      headers: {
-        Authorization: `Bearer ${tokens.accessToken}`,
-      },
-    });
-
+    const response = await bridgeFetch('http://localhost:3000/api/items');
     return response.json();
   }
 </script>

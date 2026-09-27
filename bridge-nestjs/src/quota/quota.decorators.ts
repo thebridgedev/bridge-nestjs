@@ -40,8 +40,11 @@ export {
  * @RequireQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
  * create() {}
  *
+ * // A plan feature and a limit are different keys: every hard quota is also
+ * // an entitlement of its own name, which is false at the cap, so
+ * // @RequireEntitlement('exports') here would answer 403 before the 402.
  * @Post(':id/export')
- * @RequireEntitlement('exports')
+ * @RequireEntitlement('app_active')
  * @RequireQuota('exports')
  * export() {}
  * ```
