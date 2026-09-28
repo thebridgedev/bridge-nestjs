@@ -9,8 +9,11 @@ export {
   BRIDGE_FLAGS,
   BRIDGE_FLAGS_OPTIONS,
   BRIDGE_PULL_CACHE,
+  BRIDGE_FLAG_ATTRIBUTE_SOURCE,
   type BridgeFlagsModuleOptions,
+  type FlagAttributeSource,
 } from './flags.tokens';
+export { verifiedFlagContext, resolvedFlagContext } from './request-context';
 export { BridgeFlagsService } from './flags.service';
 export {
   RequireFlag,

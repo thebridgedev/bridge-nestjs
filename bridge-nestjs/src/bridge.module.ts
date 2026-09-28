@@ -11,7 +11,7 @@ import { BridgeConfig, BridgeModuleAsyncOptions, BridgeModuleConfig } from './ty
 import { BridgeQuotaService } from './quota/quota.service';
 import { BridgeQuotaInterceptor } from './quota/quota.interceptor';
 // TBP-341 — unified backend bridge surface.
-import { BRIDGE_PULL_CACHE } from './flags/flags.tokens';
+import { BRIDGE_FLAG_ATTRIBUTE_SOURCE, BRIDGE_PULL_CACHE } from './flags/flags.tokens';
 import { BridgeService } from './bridge/bridge.service';
 import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
 
@@ -99,6 +99,7 @@ export class BridgeModule {
         BridgeAuthGuard,
         BridgeHttpService,
         BridgeService,
+        BRIDGE_FLAG_ATTRIBUTE_SOURCE,
         BRIDGE_PULL_CACHE,
         BridgeQuotaService,
         BridgeQuotaInterceptor,
@@ -123,6 +124,7 @@ export class BridgeModule {
         BridgeAuthGuard,
         BridgeHttpService,
         BridgeService,
+        BRIDGE_FLAG_ATTRIBUTE_SOURCE,
         BRIDGE_PULL_CACHE,
         BridgeQuotaService,
         BridgeQuotaInterceptor,
@@ -158,6 +160,8 @@ export class BridgeModule {
         useFactory: () => new BridgePullCache({ ttlMs: 30_000 }),
       },
       BridgeService,
+      // TBP-757 — flag rules see the workspace's plan and entitlements.
+      { provide: BRIDGE_FLAG_ATTRIBUTE_SOURCE, useExisting: BridgeService },
       BridgeQuotaService,
       BridgeQuotaInterceptor,
     ];
@@ -223,6 +227,8 @@ export class BridgeModule {
       bridgeOptionsProvider,
       pullCacheProvider,
       BridgeService,
+      // TBP-757 — flag rules see the workspace's plan and entitlements.
+      { provide: BRIDGE_FLAG_ATTRIBUTE_SOURCE, useExisting: BridgeService },
       BridgeQuotaService,
       BridgeQuotaInterceptor,
     ];

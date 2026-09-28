@@ -15,6 +15,7 @@ import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { serializeContext, type CachedFlag } from '@nebulr-group/bridge-auth-core';
+import { lastValueFrom, of } from 'rxjs';
 
 import { BridgeFlagsModule } from './flags.module';
 import { BridgeFlagsService } from './flags.service';
@@ -113,7 +114,7 @@ describe('TBP-671 — x-bridge-context is never trusted', () => {
   let reflector: Reflector;
   let guard: BridgeFlagGuard;
   const flagParam = flagParamFactory();
-  const next = { handle: () => ({ subscribe: () => undefined }) } as any;
+  const next = { handle: () => of(null) } as any;
 
   beforeEach(async () => {
     moduleRef = await Test.createTestingModule({
@@ -134,7 +135,7 @@ describe('TBP-671 — x-bridge-context is never trusted', () => {
   });
 
   /** Run a request through guard → interceptor, as NestJS does. */
-  function run(req: any, requireFlag?: string): { allowed: boolean | 'forbidden'; ctx: ExecutionContext } {
+  async function run(req: any, requireFlag?: string): Promise<{ allowed: boolean | 'forbidden'; ctx: ExecutionContext }> {
     const ctx = httpContext(req);
     let allowed: boolean | 'forbidden' = true;
     if (requireFlag) {
@@ -142,13 +143,13 @@ describe('TBP-671 — x-bridge-context is never trusted', () => {
         .spyOn(reflector, 'getAllAndOverride')
         .mockReturnValue({ key: requireFlag, defaultValue: false, options: {} });
       try {
-        allowed = guard.canActivate(ctx);
+        allowed = await guard.canActivate(ctx);
       } catch (err) {
         if (!(err instanceof ForbiddenException)) throw err;
         allowed = 'forbidden';
       }
     }
-    interceptor.intercept(ctx, next);
+    await lastValueFrom(interceptor.intercept(ctx, next));
     return { allowed, ctx };
   }
 
@@ -161,82 +162,82 @@ describe('TBP-671 — x-bridge-context is never trusted', () => {
       bridgeUser: { id: REAL_USER },
     });
 
-    it('the per-request context carries the verified identity and no header attributes', () => {
-      const { ctx } = run(request());
+    it('the per-request context carries the verified identity and no header attributes', async () => {
+      const { ctx } = await run(request());
       expect((ctx.switchToHttp().getRequest() as any).bridgeFlagsContext).toEqual({
         identity: REAL_USER,
         attributes: {},
       });
     });
 
-    it('@Flag does not unlock the plan-gated flag', () => {
-      const { ctx } = run(request());
+    it('@Flag does not unlock the plan-gated flag', async () => {
+      const { ctx } = await run(request());
       expect(evalParam(ctx, 'plan_gate')).toBe(false);
     });
 
-    it('@Flag does not unlock the victim-targeted flag', () => {
-      const { ctx } = run(request());
+    it('@Flag does not unlock the victim-targeted flag', async () => {
+      const { ctx } = await run(request());
       expect(evalParam(ctx, 'victim_only')).toBe(false);
     });
 
-    it('flags.flag() with req.bridgeFlagsContext does not unlock either flag', () => {
-      const { ctx } = run(request());
+    it('flags.flag() with req.bridgeFlagsContext does not unlock either flag', async () => {
+      const { ctx } = await run(request());
       const perRequest = (ctx.switchToHttp().getRequest() as any).bridgeFlagsContext;
       expect(service.flag('plan_gate', false, perRequest)).toBe(false);
       expect(service.flag('victim_only', false, perRequest)).toBe(false);
     });
 
-    it('@RequireFlag refuses the plan-gated route', () => {
-      expect(run(request(), 'plan_gate').allowed).toBe('forbidden');
+    it('@RequireFlag refuses the plan-gated route', async () => {
+      expect((await run(request(), 'plan_gate')).allowed).toBe('forbidden');
     });
   });
 
   describe('no verified user + spoofed header (anonymous)', () => {
     const request = () => ({ headers: { 'x-bridge-context': SPOOFED_HEADER } });
 
-    it('evaluates anonymously — no per-request context at all', () => {
-      const { ctx } = run(request());
+    it('evaluates anonymously — no per-request context at all', async () => {
+      const { ctx } = await run(request());
       expect((ctx.switchToHttp().getRequest() as any).bridgeFlagsContext).toBeUndefined();
     });
 
-    it('@Flag returns the defaults, not the spoofed identity\'s values', () => {
-      const { ctx } = run(request());
+    it('@Flag returns the defaults, not the spoofed identity\'s values', async () => {
+      const { ctx } = await run(request());
       expect(evalParam(ctx, 'plan_gate')).toBe(false);
       expect(evalParam(ctx, 'victim_only')).toBe(false);
       expect(evalParam(ctx, 'signed_in')).toBe(false);
     });
 
-    it('@RequireFlag refuses a route that needs an identity', () => {
-      expect(run(request(), 'signed_in').allowed).toBe('forbidden');
+    it('@RequireFlag refuses a route that needs an identity', async () => {
+      expect((await run(request(), 'signed_in')).allowed).toBe('forbidden');
     });
   });
 
   describe('the guard reads nothing a client can set', () => {
-    it('ignores a spoofed context already copied onto the request', () => {
+    it('ignores a spoofed context already copied onto the request', async () => {
       // e.g. an app middleware that copied the header onto the request, or a
       // guard bound after an interceptor in a custom pipeline.
       const req = {
         bridgeUser: { id: REAL_USER },
         bridgeFlagsContext: { identity: VICTIM, attributes: { tenant: { plan: 'enterprise' } } },
       };
-      expect(run(req, 'plan_gate').allowed).toBe('forbidden');
+      expect((await run(req, 'plan_gate')).allowed).toBe('forbidden');
     });
   });
 
   describe('the verified user still drives evaluation', () => {
-    it('@Flag and @RequireFlag pass for a user who really is on enterprise', () => {
+    it('@Flag and @RequireFlag pass for a user who really is on enterprise', async () => {
       service.setContext({ attributes: { tenant: { plan: 'enterprise' } } }, true);
-      const { allowed, ctx } = run({ bridgeUser: { id: REAL_USER } }, 'plan_gate');
+      const { allowed, ctx } = await run({ bridgeUser: { id: REAL_USER } }, 'plan_gate');
       expect(allowed).toBe(true);
       expect(evalParam(ctx, 'plan_gate')).toBe(true);
     });
 
-    it('@RequireFlag buckets on the verified identity (guards run before the interceptor)', () => {
-      expect(run({ bridgeUser: { id: REAL_USER } }, 'signed_in').allowed).toBe(true);
+    it('@RequireFlag buckets on the verified identity (guards run before the interceptor)', async () => {
+      expect((await run({ bridgeUser: { id: REAL_USER } }, 'signed_in')).allowed).toBe(true);
     });
 
-    it('falls back to req.user from the app\'s own auth', () => {
-      const { allowed, ctx } = run({ user: { id: REAL_USER } }, 'signed_in');
+    it('falls back to req.user from the app\'s own auth', async () => {
+      const { allowed, ctx } = await run({ user: { id: REAL_USER } }, 'signed_in');
       expect(allowed).toBe(true);
       expect(evalParam(ctx, 'signed_in')).toBe(true);
     });

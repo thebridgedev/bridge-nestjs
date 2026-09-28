@@ -32,7 +32,7 @@
 
 import { createHash } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
-import { BridgePullCache } from '@nebulr-group/bridge-auth-core';
+import { BridgePullCache, flattenBillingSnapshot } from '@nebulr-group/bridge-auth-core';
 
 import { BRIDGE_PULL_CACHE } from '../flags/flags.tokens';
 import { JwksService } from '../services/jwks.service';
@@ -41,9 +41,14 @@ import { BRIDGE_OPTIONS, type BridgeModuleOptions } from './bridge.tokens';
 import { TenantScope } from './tenant-scope';
 import { verifiedUserTokenFor } from './verified-request';
 
+/** The workspace id in VERIFIED claims, if any. */
+function tenantIdOf(claims: JwtClaims): string | undefined {
+  return claims.tid ?? claims.tenant_id;
+}
+
 /** The snapshot cache key, from VERIFIED claims only: `tid:sub`. */
 function cacheKeyFor(claims: JwtClaims): string {
-  const tid = claims.tid ?? claims.tenant_id;
+  const tid = tenantIdOf(claims);
   return tid ? `${tid}:${claims.sub ?? ''}` : claims.sub;
 }
 
@@ -51,6 +56,8 @@ function cacheKeyFor(claims: JwtClaims): string {
 export class BridgeService {
   /** Per `tid:sub`: the newest token seen (a hash of it, never the token). */
   private readonly newestToken = new Map<string, { iat?: number; fingerprint: string }>();
+  /** Per workspace: the plan claim of the newest token behind its cached billing attributes. */
+  private readonly billingPlanClaim = new Map<string, { plan?: string; iat?: number }>();
 
   constructor(
     @Inject(BRIDGE_OPTIONS) private readonly opts: BridgeModuleOptions,
@@ -99,6 +106,68 @@ export class BridgeService {
     return this.scope(verified.token, Promise.resolve(this.admit(verified.token, verified.claims)));
   }
 
+  /**
+   * TBP-757 — the `bridge:billing.*` flag targeting attributes for the
+   * workspace of the user `BridgeAuthGuard` verified on this request: plan,
+   * subscription status, trial and every entitlement, flattened with
+   * auth-core's `flattenBillingSnapshot` exactly as the browser SDKs do.
+   *
+   * Read from the same `/session/init` snapshot the quota and entitlement
+   * checks use, and cached per workspace (`billing:<tid>`) so every user of a
+   * workspace shares one fetch. The entry is dropped
+   *   - when a newer token for any user of the workspace arrives (the same
+   *     signal that drops that user's snapshot, see noteToken),
+   *   - when a newer verified token carries a different `plan` claim than the
+   *     token the entry was read for, and
+   *   - by the pull-cache TTL (30 s), which bounds staleness when no new
+   *     token shows up.
+   *
+   * Quotas (`bridge:billing.quota.*`) are not included: `/session/init` does
+   * not carry them. Rejects when Bridge cannot be reached; the flag guard
+   * then evaluates on the token's claims alone.
+   */
+  billingAttributesFor(req: unknown): Promise<Record<string, unknown>> {
+    const verified = verifiedUserTokenFor(req);
+    if (!verified) {
+      return Promise.reject(
+        new Error('[bridge-nestjs] billing attributes need a user token BridgeAuthGuard verified on this request.'),
+      );
+    }
+    // fromRequest admits the token first, which may drop stale entries.
+    const scope = this.fromRequest(req);
+    const tid = tenantIdOf(verified.claims);
+    if (!tid) return Promise.resolve({});
+    this.notePlanClaim(tid, verified.claims);
+    return this.cache.get(`billing:${tid}`, async () => {
+      const snap = await scope.snapshot();
+      return flattenBillingSnapshot({
+        subscription: snap?.tenant?.subscription,
+        entitlements: snap?.tenant?.entitlements,
+      });
+    });
+  }
+
+  /*
+   * TBP-757 — a newer verified token whose `plan` claim differs from the one
+   * the cached billing attributes were read under means the plan changed:
+   * drop them. An older token never invalidates (two users on tokens of
+   * different vintages would otherwise evict each other on every request).
+   */
+  private notePlanClaim(tid: string, claims: JwtClaims): void {
+    const raw = (claims as { plan?: unknown }).plan;
+    const plan = typeof raw === 'string' ? raw : undefined;
+    const iat = claims.iat;
+    const seen = this.billingPlanClaim.get(tid);
+    if (!seen) {
+      this.billingPlanClaim.set(tid, { plan, iat });
+      return;
+    }
+    const newer = seen.iat === undefined || iat === undefined || iat >= seen.iat;
+    if (!newer) return;
+    if (seen.plan !== plan) this.cache.invalidate(`billing:${tid}`);
+    this.billingPlanClaim.set(tid, { plan, iat });
+  }
+
   private scope(userJwt: string, cacheKey: Promise<string>): TenantScope {
     return new TenantScope(userJwt, cacheKey, this.cache, this.opts.apiBaseUrl, this.opts.appId);
   }
@@ -106,7 +175,7 @@ export class BridgeService {
   /** Runs only for a verified token: derive the key, then note the token. */
   private admit(jwt: string, claims: JwtClaims): string {
     const cacheKey = cacheKeyFor(claims);
-    this.noteToken(cacheKey, jwt, claims.iat);
+    this.noteToken(cacheKey, jwt, claims.iat, tenantIdOf(claims));
     return cacheKey;
   }
 
@@ -132,12 +201,22 @@ export class BridgeService {
    * TBP-673 — only ever called with a verified token and its verified `iat`,
    * so a forged token can neither evict nor pin another user's snapshot.
    */
-  private noteToken(cacheKey: string, jwt: string, iat: number | undefined): void {
+  private noteToken(
+    cacheKey: string,
+    jwt: string,
+    iat: number | undefined,
+    tid: string | undefined,
+  ): void {
     const fingerprint = createHash('sha256').update(jwt).digest('hex');
     const seen = this.newestToken.get(cacheKey);
     if (seen?.fingerprint === fingerprint) return;
     if (seen && seen.iat !== undefined && iat !== undefined && iat < seen.iat) return;
-    if (seen) this.cache.invalidate(`session:${cacheKey}`);
+    if (seen) {
+      this.cache.invalidate(`session:${cacheKey}`);
+      // TBP-757 — the workspace's flag billing attributes are as stale as
+      // this user's snapshot.
+      if (tid) this.cache.invalidate(`billing:${tid}`);
+    }
     this.newestToken.set(cacheKey, { iat, fingerprint });
   }
 
