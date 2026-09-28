@@ -1,17 +1,53 @@
 ---
 title: Gate features by role or privilege
-description: Using a user's role or privileges as feature-flag targeting attributes from a NestJS backend.
+description: Using a user's privileges or role as feature-flag targeting attributes from a NestJS backend.
 sidebar:
   label: NestJS
 ---
 
 # Gate features by role or privilege
 
-Role and privilege gating with `@RequireRole()` / `@RequirePrivilege()` ([How roles & privileges work](/auth/roles/how-it-works/)) is a hard yes/no check: the request either has the role or it's a `403`. Feature flags are the tool for the softer case: rolling something out to a role gradually, behind a kill switch, or A/B-tested on top of the role check. `@nebulr-group/bridge-nestjs` ships two different flag mechanisms, and they differ in exactly how much role/privilege wiring you have to do yourself.
+Feature flags are the standard way to decide who gets a route, an API endpoint or a feature. A flag's rule changes without a release and applies live when someone's role or plan changes. `@RequirePrivilege()` / `@RequireRole()` ([How roles & privileges work](/auth/roles/how-it-works/)) are still there for a fixed yes/no check that should never change at runtime.
 
-## Legacy flags (`@RequireFeatureFlag` / `FeatureFlagService`): no wiring needed
+When the rule is about who someone is, prefer a **privilege** rule (`privileges contains "BETA_REPORTS"`) over a **role** rule (`user.role eq "ADMIN"`). A privilege rule keeps working when roles are renamed or reshuffled; which privileges a role has is only "the default setup" and differs per app.
 
-The legacy flag path evaluates server-side: `FeatureFlagService` sends the caller's **access token** to Bridge's `cloud-views` API (`/flags/evaluate` or `/flags/bulkEvaluate`), and Bridge itself decodes that token to resolve role, privileges, and tenant for targeting. Same as the frontend SDKs, there's nothing to configure in your NestJS app; a targeting rule written against `user.role` or `privileges` in Control Center (your admin dashboard at app.thebridge.dev) just works the moment you protect a route:
+## `@RequireFlag` / `BridgeFlagsService`: nothing to wire
+
+The flags module (`@nebulr-group/bridge-nestjs/flags`; see [Feature Flags](/feature-flags/)) evaluates in-process. On every request `BridgeAuthGuard` verified, `BridgeFlagGuard`, `@Flag(...)` and `BridgeContextInterceptor` fill in the user's `user.role`, `privileges`, `user.id`, `user.email`, `tenant.id` and `tenant.plan` from the verified token, and, with `BridgeModule` loaded, the workspace's `bridge:billing.plan` and `bridge:billing.entitlement.<feature>`. A rule written in Control Center (your admin dashboard at app.thebridge.dev) gives the same answer here as in the browser:
+
+```typescript
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { BridgeAuthGuard } from '@nebulr-group/bridge-nestjs';
+import { RequireFlag, BridgeFlagGuard } from '@nebulr-group/bridge-nestjs/flags';
+
+@Controller('reports')
+@UseGuards(BridgeAuthGuard, BridgeFlagGuard) // auth first, so the token is verified
+export class ReportsController {
+  @Get('beta')
+  @RequireFlag('beta_reports') // rule: privileges contains "BETA_REPORTS"
+  getBetaReports() { /* … */ }
+}
+```
+
+Continuing the [enterprise example](/auth/roles/common-setups/): a flag `beta_reports` targeted at the privilege (`privileges contains "BETA_REPORTS"`), or at the role (`user.role eq "ENTERPRISE_BETA"`), evaluates correctly with zero code changes.
+
+Only verified values count: the attributes come from the token `BridgeAuthGuard` verified, never from the `x-bridge-context` header or a `role` on `req.user`. See [Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/) for the full attribute list.
+
+In a service, pass the request's context along so the rule sees the same attributes:
+
+```typescript
+@Get('reports')
+list(@Req() req) {
+  const beta = this.flags.flag('beta_reports', false, req.bridgeFlagsContext); // set by BridgeContextInterceptor
+  // …
+}
+```
+
+A bare `this.flags.flag('beta_reports', false, { identity: userId })` sees only the identity you pass, so a privilege or role rule won't match it.
+
+## `@RequireFeatureFlag` / `FeatureFlagService`: the older path
+
+`FeatureFlagService` sends the caller's access token to Bridge's API (`/flags/evaluate` or `/flags/bulkEvaluate`) and Bridge evaluates the flag there. Bridge resolves `user.role`, `privileges`, `user.email`, `tenant.id` and `tenant.plan` from the token, and the workspace's `bridge:billing.plan`, `bridge:billing.subscription.status`, `bridge:billing.trial` and `bridge:billing.entitlement.<feature>` from its own billing records, so role, privilege, plan and plan-feature rules give the same answer here as in the browser. Plan-limit numbers (`bridge:billing.quota.*`) are not resolved on this path. A refusal says why: `402 FEATURE_NOT_IN_PLAN`, `403 FEATURE_NOT_PERMITTED` or `403 FEATURE_OFF`, as for `@RequireFlag`.
 
 ```typescript
 import { Controller, Get } from '@nestjs/common';
@@ -20,66 +56,12 @@ import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 @Controller('reports')
 export class ReportsController {
   @Get('beta')
-  @RequireFeatureFlag('beta_reports') // targeting rule can reference user.role / privileges directly
+  @RequireFeatureFlag('beta_reports') // role, privilege, plan and plan-feature rules all work
   getBetaReports() { /* … */ }
 }
 ```
-
-Continuing the [enterprise example](/auth/roles/common-setups/): a flag `beta_reports` targeted either at the role directly (`user.role eq "ENTERPRISE_BETA"`) or at the privilege instead (`privileges contains "BETA_REPORTS"`) evaluates correctly with zero code changes, because the evaluation happens on Bridge's side against the same JWT your guard already verified.
-
-## Feature Flags 2.0 (`BridgeFlagsService` / `@RequireFlag`): wiring is explicit
-
-The newer, synchronous flags module (`@nebulr-group/bridge-nestjs/flags`; see [Feature Flags](/feature-flags/)) evaluates **locally, in-process**, against whatever context you hand it. This is the one real backend-vs-frontend difference worth knowing: nothing about role or privilege reaches the evaluator automatically here. A server process isn't "a user," so the SDK never assumes an identity, and it never reaches into `req.bridgeUser` on its own. You either pass identity per call, or you register an attribute provider that does the reading for you.
-
-**Per-call identity, no role targeting:**
-
-```typescript
-import { Injectable } from '@nestjs/common';
-import { BridgeFlagsService } from '@nebulr-group/bridge-nestjs/flags';
-
-@Injectable()
-export class ReportsService {
-  constructor(private readonly flags: BridgeFlagsService) {}
-
-  generate(userId: string) {
-    return this.flags.flag('beta_reports', false, { identity: userId });
-  }
-}
-```
-
-This buckets rollouts correctly per-user, but a targeting rule written against role or plan won't resolve; the evaluator has no idea what this user's role is unless you tell it.
-
-**Registering role/plan as targeting attributes**: do this once at bootstrap with an `AuthAttributeProvider` (from `@nebulr-group/bridge-auth-core`) that reads your already-verified JWT claims:
-
-```typescript
-import { AuthAttributeProvider } from '@nebulr-group/bridge-auth-core';
-
-// once at bootstrap
-this.flags.bridge.registerAttributeProvider(
-  new AuthAttributeProvider({ getClaims: () => getCurrentClaims() }),
-);
-```
-
-Once registered, a rule against `bridge:user.role` or `bridge:tenant.plan` resolves the same way it would if it had been decoded automatically. The difference from the frontend (and from the legacy flag path above) is that here *you* wired the provider in, rather than it being implicit. This also means it's on you to make sure `getClaims()` reads from a verified source (`req.bridgeUser`/`req.bridgeApiToken`, set by `BridgeAuthGuard`) and never from anything client-supplied: the same "never trust client-sent role/plan attributes" rule called out in [Feature Flags](/feature-flags/#bridge-managed-attributes) applies here.
-
-**Gating a whole route on a flag**, independent of whether the flag's rule references role at all:
-
-```typescript
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { RequireFlag, BridgeFlagGuard } from '@nebulr-group/bridge-nestjs/flags';
-
-@Controller('reports')
-@UseGuards(BridgeFlagGuard)
-export class ReportsController {
-  @Get('beta')
-  @RequireFlag('beta_reports')
-  getBetaReports() { /* … */ }
-}
-```
-
-`BridgeFlagGuard` doesn't verify identity itself; pair it with `BridgeAuthGuard` (or your own auth) so `req.bridgeUser`/`req.bridgeApiToken` is populated first, the same requirement as the attribute provider above.
 
 ## Which one to reach for
 
-- Already using `@RequireFeatureFlag` / route-rule privileges and just need a role-targeted rollout? Nothing to change: write the Control Center rule against `user.role` or `privileges` and it evaluates automatically.
-- Building new flag-gated code, need synchronous evaluation with no network round-trip per check, or need non-boolean flag values? Use `BridgeFlagsService` / `@RequireFlag`, and remember to register the attribute provider if any of your targeting rules need role or plan.
+- New flag-gated code: `@RequireFlag` / `BridgeFlagsService`. It evaluates in-process with no network round-trip per check, updates live, and supports non-boolean values and rules on plan-limit numbers.
+- Existing `@RequireFeatureFlag` code keeps working, with role, privilege, plan and plan-feature rules alike.

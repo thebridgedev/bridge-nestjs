@@ -11,7 +11,7 @@ export {
   type RequireQuotaOptions,
   type SyncQuotaOptions,
 } from './quota.decorators';
-export { BridgeQuotaInterceptor } from './quota.interceptor';
+export { BridgeQuotaInterceptor, USAGE_COUNTED_HEADER } from './quota.interceptor';
 export {
   BridgeQuotaService,
   QuotaExceededException,

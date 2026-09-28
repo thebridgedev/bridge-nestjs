@@ -9,8 +9,11 @@ export {
   BRIDGE_FLAGS,
   BRIDGE_FLAGS_OPTIONS,
   BRIDGE_PULL_CACHE,
+  BRIDGE_FLAG_ATTRIBUTE_SOURCE,
   type BridgeFlagsModuleOptions,
+  type FlagAttributeSource,
 } from './flags.tokens';
+export { verifiedFlagContext, resolvedFlagContext } from './request-context';
 export { BridgeFlagsService } from './flags.service';
 export {
   RequireFlag,
@@ -22,6 +25,17 @@ export {
 } from './flag.decorator';
 export { BridgeFlagGuard } from './flag.guard';
 export { BridgeContextInterceptor } from './flag.interceptor';
+// TBP-756 — why a flag-gated endpoint refused.
+export {
+  FeatureNotInPlanException,
+  FeatureForbiddenException,
+  featureRefusal,
+  featureRefusalBody,
+  type FeatureRefusalBody,
+  type FeatureRefusalCode,
+  type FeatureOffReason,
+  type FeatureOffExplanation,
+} from './feature-refusal';
 
 // Auth-core re-exports so consumers don't need a direct dep when they only
 // want flag types.

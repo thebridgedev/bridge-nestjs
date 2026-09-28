@@ -16,6 +16,8 @@ import { BridgeService } from '../bridge/bridge.service';
 import { rememberVerifiedUserToken } from '../bridge/verified-request';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { REQUIRED_ROLE_KEY } from '../decorators/require-role.decorator';
+import { featureRefusal } from '../flags/feature-refusal';
+import type { RequirementVerdict } from '../services/feature-flag.service';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-feature-flag.decorator';
 import { REQUIRED_PRIVILEGE_KEY } from '../decorators/require-privilege.decorator';
 import { ACCEPT_AUTH_KEY, AuthType } from '../decorators/accept-auth.decorator';
@@ -411,14 +413,16 @@ export class BridgeAuthGuard implements CanActivate {
       if (requiredFlag && token) {
         const flagEnabled = await this.featureFlagService.evaluateRequirement(requiredFlag, token);
         if (!flagEnabled) {
+          const verdict = this.explainFlagFailure(requiredFlag, token);
           const flagName =
             typeof requiredFlag === 'string' ? requiredFlag : JSON.stringify(requiredFlag);
-          this.configService.log('Feature flag check failed', { flag: flagName });
-          throw new ForbiddenException({
-            statusCode: 403,
-            error: 'Forbidden',
-            message: `Feature flag '${flagName}' is not enabled`,
+          this.configService.log('Feature flag check failed', {
+            flag: flagName,
+            reason: verdict?.explanation?.reason,
           });
+          // TBP-756 — 402 FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED /
+          // 403 FEATURE_OFF, with the fix named.
+          throw featureRefusal(flagName, verdict?.explanation, this.configService.manageRoute);
         }
         this.configService.log('Feature flag check passed', { flag: requiredFlag });
       }
@@ -436,9 +440,26 @@ export class BridgeAuthGuard implements CanActivate {
   }
 
   /**
+   * TBP-756 — why the requirement just refused is off, from the reasons Bridge
+   * sent with that evaluation. Undefined (→ 403 FEATURE_OFF) when the service
+   * cannot say.
+   */
+  private explainFlagFailure(
+    requirement: FeatureFlagRequirement,
+    token: string,
+  ): RequirementVerdict | undefined {
+    const svc = this.featureFlagService as Partial<FeatureFlagService>;
+    if (typeof svc.explainFailure !== 'function') return undefined;
+    try {
+      return svc.explainFailure.call(this.featureFlagService, requirement, token);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Enforce the TBP-472 route-rule conditions for a user JWT:
-   *   - `featureFlag` → 403 Forbidden when disabled (reuses FeatureFlagService,
-   *     the same eval path as `@RequireFeatureFlag`).
+   *   - `featureFlag` → 402 FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED / 403 FEATURE_OFF when off (TBP-756; FeatureFlagService, the same eval path as `@RequireFeatureFlag`).
    *   - `plans` → 402 Payment Required (`plan_required`) when the tenant's
    *     subscription plan slug is not in the allow-list.
    *   - `entitlement` → 402 Payment Required (`entitlement_missing`) when any
@@ -474,12 +495,12 @@ export class BridgeAuthGuard implements CanActivate {
           typeof rule.featureFlag === 'string'
             ? rule.featureFlag
             : JSON.stringify(rule.featureFlag);
-        this.configService.log('Route feature flag check failed', { flag: flagName });
-        throw new ForbiddenException({
-          statusCode: 403,
-          error: 'Forbidden',
-          message: `Feature flag '${flagName}' is not enabled`,
+        const verdict = this.explainFlagFailure(rule.featureFlag, token);
+        this.configService.log('Route feature flag check failed', {
+          flag: flagName,
+          reason: verdict?.explanation?.reason,
         });
+        throw featureRefusal(flagName, verdict?.explanation, this.configService.manageRoute);
       }
       this.configService.log('Route feature flag check passed');
     }

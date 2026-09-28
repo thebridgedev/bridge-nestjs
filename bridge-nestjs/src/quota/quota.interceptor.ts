@@ -36,7 +36,20 @@ const handled = new WeakSet<object>();
 
 interface HttpLikeResponse {
   statusCode?: number;
+  // Express / Node
+  setHeader?: (name: string, value: string) => unknown;
+  getHeader?: (name: string) => unknown;
+  // Fastify reply
+  header?: (name: string, value: string) => unknown;
 }
+
+/**
+ * TBP-697 — outside production, a response from an endpoint that counts a
+ * metric says so, so the browser plugin can warn in development when the page
+ * ALSO reports that metric with `bridge.usage` (the same action counted
+ * twice). Never sent when `NODE_ENV=production`.
+ */
+export const USAGE_COUNTED_HEADER = 'X-Bridge-Usage-Counted';
 
 @Injectable()
 export class BridgeQuotaInterceptor implements NestInterceptor {
@@ -64,13 +77,28 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
 
     const before = async (): Promise<{ recordCounter: boolean }> => {
       if (entitlement) await this.quota.assertEntitlement(request, entitlement);
-      if (!required) return { recordCounter: false };
-      const decision = await this.quota.assertQuota(request, required.metric, {
-        current: this.counter(required, context, request),
-      });
+      // TBP-697 — this endpoint is where these metrics are counted. Marked
+      // before the check so a 402 refusal carries it too.
+      const counted = [required?.metric, sync?.metric].filter((m): m is string => !!m);
+      if (!required) {
+        this.markCounted(response, counted);
+        return { recordCounter: false };
+      }
+      let decision;
+      try {
+        decision = await this.quota.assertQuota(request, required.metric, {
+          current: this.counter(required, context, request),
+        });
+      } catch (error) {
+        this.markCounted(response, counted);
+        throw error;
+      }
       // A gauge nobody counts here (e.g. `users`, which Bridge keeps from
       // membership) is checked but never reported as a counter event.
-      return { recordCounter: !required.current && decision.quota?.kind !== 'gauge' };
+      const recordCounter = !required.current && decision.quota?.kind !== 'gauge';
+      const checkedOnly = !required.current && !recordCounter;
+      this.markCounted(response, checkedOnly ? counted.filter((m) => m !== required.metric) : counted);
+      return { recordCounter };
     };
 
     const after = async ({ recordCounter }: { recordCounter: boolean }): Promise<void> => {
@@ -105,6 +133,31 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
         );
       }),
     );
+  }
+
+  /**
+   * TBP-697 — name the metrics this endpoint counts on the response, outside
+   * production only. Also exposed to cross-origin pages (`fetch` cannot read
+   * a custom header otherwise). Best effort: never fails the request.
+   */
+  private markCounted(response: HttpLikeResponse | undefined, metrics: string[]): void {
+    if (!response || metrics.length === 0 || process.env.NODE_ENV === 'production') return;
+    try {
+      const set = (name: string, value: string) => {
+        if (typeof response.setHeader === 'function') response.setHeader(name, value);
+        else if (typeof response.header === 'function') response.header(name, value);
+      };
+      const current = (name: string): string => {
+        const raw = typeof response.getHeader === 'function' ? response.getHeader(name) : undefined;
+        return Array.isArray(raw) ? raw.join(', ') : typeof raw === 'string' ? raw : '';
+      };
+      const merge = (existing: string, add: string[]) =>
+        [...new Set([...existing.split(',').map((v) => v.trim()).filter(Boolean), ...add])].join(', ');
+      set(USAGE_COUNTED_HEADER, merge(current(USAGE_COUNTED_HEADER), [...new Set(metrics)]));
+      set('Access-Control-Expose-Headers', merge(current('Access-Control-Expose-Headers'), [USAGE_COUNTED_HEADER]));
+    } catch {
+      /* a dev hint must never break the request */
+    }
   }
 
   /** Nest set the final status before interceptors ran; the handler may have changed it. */

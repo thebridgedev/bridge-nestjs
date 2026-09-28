@@ -4,6 +4,7 @@
 // `enabled: false` opts so the BridgeFlags instance is purely cache-backed.
 
 import 'reflect-metadata';
+import { lastValueFrom, of } from 'rxjs';
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
@@ -161,20 +162,20 @@ describe('BridgeFlagGuard', () => {
     } as unknown as ExecutionContext;
   }
 
-  it('passes through when there is no @RequireFlag metadata', () => {
+  it('passes through when there is no @RequireFlag metadata', async () => {
     const ctx = makeContext();
-    expect(guard.canActivate(ctx)).toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
-  it('throws ForbiddenException when the flag is off', () => {
+  it('throws ForbiddenException when the flag is off', async () => {
     // No hydrate; default `false`. Flag is off → guard rejects.
     const ctx = makeContext({
       [REQUIRE_FLAG_KEY]: { key: 'gated', defaultValue: false, options: {} },
     });
-    expect(() => guard.canActivate(ctx)).toThrow(ForbiddenException);
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
   });
 
-  it('allows when the flag evaluates to true', () => {
+  it('allows when the flag evaluates to true', async () => {
     service.hydrate([
       {
         key: 'gated',
@@ -187,10 +188,10 @@ describe('BridgeFlagGuard', () => {
     const ctx = makeContext({
       [REQUIRE_FLAG_KEY]: { key: 'gated', defaultValue: false, options: {} },
     });
-    expect(guard.canActivate(ctx)).toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
   });
 
-  it('honors a custom `equals` value', () => {
+  it('honors a custom `equals` value', async () => {
     service.hydrate([
       {
         key: 'tier',
@@ -203,14 +204,14 @@ describe('BridgeFlagGuard', () => {
     const ctx = makeContext({
       [REQUIRE_FLAG_KEY]: { key: 'tier', defaultValue: 'free', options: { equals: 'pro' } },
     });
-    expect(guard.canActivate(ctx)).toBe(true);
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
     const ctxFail = makeContext({
       [REQUIRE_FLAG_KEY]: { key: 'tier', defaultValue: 'free', options: { equals: 'enterprise' } },
     });
-    expect(() => guard.canActivate(ctxFail)).toThrow(ForbiddenException);
+    await expect(guard.canActivate(ctxFail)).rejects.toThrow(ForbiddenException);
   });
 
-  it('silently skips when `optional: true`', () => {
+  it('silently skips when `optional: true`', async () => {
     const ctx = makeContext({
       [REQUIRE_FLAG_KEY]: {
         key: 'never_set',
@@ -218,7 +219,7 @@ describe('BridgeFlagGuard', () => {
         options: { optional: true },
       },
     });
-    expect(guard.canActivate(ctx)).toBe(false);
+    await expect(guard.canActivate(ctx)).resolves.toBe(false);
   });
 });
 
@@ -232,6 +233,8 @@ describe('BridgeContextInterceptor', () => {
     interceptor = moduleRef.get(BridgeContextInterceptor);
   });
 
+  const next = { handle: () => of(null) } as any;
+
   function ctxWithHeaders(headers: Record<string, string>): ExecutionContext {
     const req: any = { headers };
     return {
@@ -244,35 +247,31 @@ describe('BridgeContextInterceptor', () => {
     } as unknown as ExecutionContext;
   }
 
-  it('ignores a client-supplied x-bridge-context header (TBP-671)', () => {
+  it('ignores a client-supplied x-bridge-context header (TBP-671)', async () => {
     const header = serializeContext({
       identity: 'user-42',
       attributes: { plan: 'pro' },
     });
     const ctx = ctxWithHeaders({ 'x-bridge-context': header });
-    // The interceptor mutates `req.bridgeFlagsContext` synchronously
-    // before next.handle() runs. We assert that side effect.
-    const next = { handle: () => ({ subscribe: () => undefined }) } as any;
-    interceptor.intercept(ctx, next);
+    // The interceptor sets `req.bridgeFlagsContext` before next.handle() runs.
+    await lastValueFrom(interceptor.intercept(ctx, next));
     const req = (ctx.switchToHttp().getRequest() as any);
     expect(req.bridgeFlagsContext).toBeUndefined();
   });
 
-  it('falls back to req.bridgeUser.id when no header is present', () => {
+  it('falls back to req.bridgeUser.id when no header is present', async () => {
     const ctx = ctxWithHeaders({});
     (ctx.switchToHttp().getRequest() as any).bridgeUser = { id: 'jwt-user' };
-    const next = { handle: () => ({ subscribe: () => undefined }) } as any;
-    interceptor.intercept(ctx, next);
+    await lastValueFrom(interceptor.intercept(ctx, next));
     expect((ctx.switchToHttp().getRequest() as any).bridgeFlagsContext).toEqual({
       identity: 'jwt-user',
       attributes: {},
     });
   });
 
-  it('is a no-op when neither header nor identity is present', () => {
+  it('is a no-op when neither header nor identity is present', async () => {
     const ctx = ctxWithHeaders({});
-    const next = { handle: () => ({ subscribe: () => undefined }) } as any;
-    interceptor.intercept(ctx, next);
+    await lastValueFrom(interceptor.intercept(ctx, next));
     expect((ctx.switchToHttp().getRequest() as any).bridgeFlagsContext).toBeUndefined();
   });
 });

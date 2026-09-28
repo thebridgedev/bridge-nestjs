@@ -17,7 +17,7 @@ import {
   type ExecutionContext,
 } from '@nestjs/common';
 
-import { verifiedFlagContext } from './request-context';
+import { flagContextFor } from './request-context';
 
 /** Metadata key for the `@RequireFlag` decorator — consumed by `BridgeFlagGuard`. */
 export const REQUIRE_FLAG_KEY = 'bridge:flag:require';
@@ -72,7 +72,10 @@ export function RequireFlag(
  * Evaluates against the verified caller (`req.bridgeUser`, then `req.user`)
  * using the BridgeFlags instance `BridgeContextInterceptor` / `BridgeFlagGuard`
  * put on the request. Nothing a client sends — including the internal
- * `x-bridge-context` header — changes the value (TBP-671).
+ * `x-bridge-context` header — changes the value (TBP-671). The context is the
+ * one the guard or interceptor resolved for this request (verified role,
+ * privileges, plan and the workspace's `bridge:billing.*` attributes, TBP-757);
+ * without either, the verified token's claims alone.
  */
 export const Flag = createParamDecorator(
   (data: { key: string; defaultValue: unknown }, ctx: ExecutionContext) => {
@@ -87,7 +90,7 @@ export const Flag = createParamDecorator(
     if (!bridge) {
       return data?.defaultValue;
     }
-    return bridge.flag(data.key, data.defaultValue, verifiedFlagContext(req)).value;
+    return bridge.flag(data.key, data.defaultValue, flagContextFor(req)).value;
   },
 );
 

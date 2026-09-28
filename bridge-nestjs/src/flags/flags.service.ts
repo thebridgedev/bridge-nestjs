@@ -16,6 +16,7 @@ import {
   type BridgeFlagsHooks,
   type CachedFlag,
   type EvalContext,
+  type FlagEvalResult,
 } from '@nebulr-group/bridge-auth-core';
 
 import { BRIDGE_FLAGS_OPTIONS, BRIDGE_FLAGS, type BridgeFlagsModuleOptions } from './flags.tokens';
@@ -49,6 +50,14 @@ export class BridgeFlagsService implements OnModuleDestroy {
    */
   flag<T>(key: string, defaultValue: T, context?: Partial<EvalContext>): T {
     return this.bridge.flag<T>(key, defaultValue, context).value;
+  }
+
+  /**
+   * TBP-756 — the whole evaluation: `value`, `passed`, and with a new enough
+   * auth-core, `reason` / `feature` when the feature is off.
+   */
+  evaluate<T>(key: string, defaultValue: T, context?: Partial<EvalContext>): FlagEvalResult<T> {
+    return this.bridge.flag<T>(key, defaultValue, context);
   }
 
   /** Replace the global eval context (e.g. on startup). */
