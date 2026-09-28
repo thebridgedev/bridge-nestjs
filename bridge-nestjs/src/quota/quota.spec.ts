@@ -603,3 +603,100 @@ describe('BridgeModule.forRoot() reads its settings from the environment when gi
   });
 });
 
+
+// ── TBP-697: dev-only "this endpoint counted <metric>" header ─────────────
+
+describe('X-Bridge-Usage-Counted (outside production only) — TBP-697', () => {
+  /** An Express-like response that keeps its headers. */
+  function expressResponse(status = 201) {
+    const headers = new Map<string, string>();
+    return {
+      statusCode: status,
+      headers,
+      setHeader: (name: string, value: string) => void headers.set(name.toLowerCase(), value),
+      getHeader: (name: string) => headers.get(name.toLowerCase()),
+    };
+  }
+  async function intercept(method: string, response: ReturnType<typeof expressResponse>) {
+    return lastValueFrom(
+      interceptor.intercept(ctx(TicketsController, method, verifiedRequest(), response as any), {
+        handle: () => of({ ok: true }),
+      }),
+    );
+  }
+  const prevEnv = process.env.NODE_ENV;
+  afterEach(() => {
+    process.env.NODE_ENV = prevEnv;
+  });
+
+  it('a counter endpoint names its metric on the 2xx and exposes the header to cross-origin pages', async () => {
+    process.env.NODE_ENV = 'development';
+    entitlements = { exports: true };
+    quotas.exports = snap('exports', 1, 5);
+    const response = expressResponse();
+    await intercept('export', response);
+    expect(response.headers.get('x-bridge-usage-counted')).toBe('exports');
+    expect(response.headers.get('access-control-expose-headers')).toContain('X-Bridge-Usage-Counted');
+  });
+
+  it('a gauge endpoint (@RequireQuota with current) and @SyncQuota name theirs', async () => {
+    process.env.NODE_ENV = 'test';
+    quotas.tickets = snap('tickets', 1, 5, { kind: 'gauge' });
+    const created = expressResponse();
+    await intercept('create', created);
+    expect(created.headers.get('x-bridge-usage-counted')).toBe('tickets');
+    const removed = expressResponse(200);
+    await intercept('remove', removed);
+    expect(removed.headers.get('x-bridge-usage-counted')).toBe('tickets');
+  });
+
+  it('a 402 refusal carries it too (the browser sees the metric even at the cap)', async () => {
+    process.env.NODE_ENV = 'development';
+    entitlements = { exports: true };
+    quotas.exports = snap('exports', 5, 5);
+    const response = expressResponse();
+    await refusal(intercept('export', response));
+    expect(response.headers.get('x-bridge-usage-counted')).toBe('exports');
+  });
+
+  it('a gauge Bridge keeps (`users`) is only checked here, so it is not named', async () => {
+    process.env.NODE_ENV = 'development';
+    quotas.users = snap('users', 2, 5, { kind: 'gauge' });
+    const response = expressResponse();
+    await intercept('invite', response);
+    expect(response.headers.has('x-bridge-usage-counted')).toBe(false);
+  });
+
+  it('merges with an Access-Control-Expose-Headers the app already set', async () => {
+    process.env.NODE_ENV = 'development';
+    entitlements = { exports: true };
+    quotas.exports = snap('exports', 1, 5);
+    const response = expressResponse();
+    response.setHeader('Access-Control-Expose-Headers', 'X-Request-Id');
+    await intercept('export', response);
+    expect(response.headers.get('access-control-expose-headers')).toBe('X-Request-Id, X-Bridge-Usage-Counted');
+  });
+
+  it('NODE_ENV=production: no header at all — no production noise', async () => {
+    process.env.NODE_ENV = 'production';
+    entitlements = { exports: true };
+    quotas.exports = snap('exports', 1, 5);
+    const response = expressResponse();
+    await intercept('export', response);
+    expect(response.headers.size).toBe(0);
+  });
+
+  it('a Fastify reply (header()) works too', async () => {
+    process.env.NODE_ENV = 'development';
+    entitlements = { exports: true };
+    quotas.exports = snap('exports', 1, 5);
+    const headers = new Map<string, string>();
+    const reply = {
+      statusCode: 201,
+      header: (n: string, v: string) => void headers.set(n.toLowerCase(), v),
+      getHeader: (n: string) => headers.get(n.toLowerCase()),
+    };
+    await intercept('export', reply as any);
+    expect(headers.get('x-bridge-usage-counted')).toBe('exports');
+  });
+});

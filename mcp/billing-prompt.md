@@ -295,7 +295,12 @@ const q = await tenant.usage.quota('api_calls');
 // q.overageEstimate, q.overcap. null when no quota is configured for the metric.
 ```
 
-Reporting usage is a backend responsibility (it must be trusted); the per-unit
+Count usage once, where the action happens: an action that calls this backend
+is counted here, and the frontend then reports nothing for it (outside
+production, a counting response carries `X-Bridge-Usage-Counted: <metric>` and
+bridge-svelte warns in development when the page reports the same metric). An
+action that never reaches a server is counted by the frontend plugin — that is
+first-class, and it trusts the browser. The per-unit
 **price** is configuration, set via `set_plan_quota` with `policy: "metered"` and
 `priceAmount` (MCP) or `bridge plan quota set <key> --policy metered
 --price-amount <n>` (CLI) — see "Configuring plans" above. bridge-api meters and

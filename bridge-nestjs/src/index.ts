@@ -22,6 +22,7 @@ export {
   SYNC_QUOTA_KEY,
   REQUIRED_ENTITLEMENT_KEY,
   BridgeQuotaInterceptor,
+  USAGE_COUNTED_HEADER,
   BridgeQuotaService,
   QuotaExceededException,
   EntitlementRequiredException,
