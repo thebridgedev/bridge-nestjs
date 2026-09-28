@@ -24,6 +24,21 @@ export const BRIDGE_FLAGS_OPTIONS = Symbol('BRIDGE_FLAGS_OPTIONS');
  */
 export const BRIDGE_PULL_CACHE = Symbol('BRIDGE_PULL_CACHE');
 
+/**
+ * TBP-757 — injection token for the source of a request's workspace billing
+ * attributes (`bridge:billing.*`). `BridgeModule` binds it to `BridgeService`;
+ * with the flags module on its own nothing is bound and flag rules see the
+ * verified token's claims only. A token rather than the class so this
+ * auth-free entry point never loads the auth half of the SDK.
+ */
+export const BRIDGE_FLAG_ATTRIBUTE_SOURCE = Symbol('BRIDGE_FLAG_ATTRIBUTE_SOURCE');
+
+/** What `BRIDGE_FLAG_ATTRIBUTE_SOURCE` provides — `BridgeService` implements it. */
+export interface FlagAttributeSource {
+  /** `bridge:billing.*` attributes for the verified user's workspace; rejects when Bridge is unreachable. */
+  billingAttributesFor(req: unknown): Promise<Record<string, unknown>>;
+}
+
 export interface BridgeFlagsModuleOptions {
   /** Bridge API base URL. */
   apiBaseUrl: string;
@@ -40,6 +55,12 @@ export interface BridgeFlagsModuleOptions {
    * refuse to bucket rolled-out rules without an explicit identity.
    */
   mode?: BridgeFlagsMode;
+  /**
+   * TBP-756 — where a `402 FEATURE_NOT_IN_PLAN` refusal from `@RequireFlag`
+   * points to upgrade. Default `/subscription` (the same default as
+   * `billing.manageRoute` on `BridgeModule`).
+   */
+  manageRoute?: string;
   /** Stable server-instance ID, for system-level flags (TBP-172). */
   serverInstanceId?: string;
   /** Initial eval context (e.g. `{ attributes: { region: 'eu' } }`). */

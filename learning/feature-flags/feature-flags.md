@@ -26,9 +26,10 @@ target on once they're wired in.
    app.thebridge.dev) and give it rules: on/off, a percentage rollout, or
    conditions on attributes like `user.role` or `tenant.plan`.
 2. **The SDK evaluates those rules locally** against the eval context: the
-   identity and attributes a flag rule evaluates against. On a backend your
-   code supplies both; an attribute provider can feed verified auth claims in
-   once you register it.
+   identity and attributes a flag rule evaluates against. On a request
+   `BridgeAuthGuard` verified, the SDK fills in the user's role, privileges
+   and workspace plan and the plan's features for you, the same as in the
+   browser.
 3. **Changes arrive live.** Edit a rule in Control Center and every connected
    service updates in place, typically within seconds, over the live channel.
    No restart, no redeploy.
@@ -57,10 +58,10 @@ change live.
 
 ## Targeting
 
-- [Target by plan or role](/feature-flags/targeting/by-plan-or-role/): register
-  an attribute provider once and attributes like `user.role` and `tenant.plan`
-  merge into every evaluation from your verified JWT claims. For plan-granted
-  features, prefer entitlement attributes; see
+- [Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/):
+  rules on `privileges`, `user.role`, `bridge:billing.plan` or a plan feature
+  (`bridge:billing.entitlement.<feature>`) work with no wiring. For a feature a
+  plan sells, point the rule at the plan's feature; see
   [Lock features to a plan](/billing/limits/lock-features/).
 - [Send context from your backend](/feature-flags/targeting/send-context/):
   supply an `identity` for bucketing and app-specific facts (like a project

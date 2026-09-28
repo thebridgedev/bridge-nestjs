@@ -34,6 +34,10 @@ export {
  * A `metered` quota never refuses. Nothing is recorded for a refused, failed
  * (4xx/5xx) or thrown request. Needs a user verified by `BridgeAuthGuard`.
  *
+ * Outside production the response names the metric in
+ * `X-Bridge-Usage-Counted`, so bridge-svelte can warn in development when the
+ * page counts the same metric too (count once, where the action happens).
+ *
  * @example
  * ```ts
  * @Post()

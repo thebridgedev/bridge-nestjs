@@ -81,9 +81,10 @@ same user flip-flop request to request). Pass identity per eval; see
 ## Flags work standalone
 
 `BridgeFlagsModule` is auth-free: an `apiBaseUrl` and `apiKey` are all the
-configuration flags need, no other Bridge module required. When Bridge auth or
-billing *is* in your app, you can surface their state as targeting attributes
-by registering an attribute provider (see
-[Target by plan or role](/feature-flags/targeting/by-plan-or-role/)).
+configuration flags need, no other Bridge module required. With
+`BridgeAuthGuard` verifying the user, rules on their role, privileges and
+token plan work with no wiring; add `BridgeModule` and rules on the
+workspace's billing plan and plan features work too (see
+[Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/)).
 
 Next: [Get started](/feature-flags/get-started/).

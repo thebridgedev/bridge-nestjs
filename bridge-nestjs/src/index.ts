@@ -22,6 +22,7 @@ export {
   SYNC_QUOTA_KEY,
   REQUIRED_ENTITLEMENT_KEY,
   BridgeQuotaInterceptor,
+  USAGE_COUNTED_HEADER,
   BridgeQuotaService,
   QuotaExceededException,
   EntitlementRequiredException,
@@ -41,7 +42,17 @@ export {
 export { BridgeConfigService, BRIDGE_CONFIG } from './services/bridge-config.service';
 export { JwksService, TokenVerificationError } from './services/jwks.service';
 export type { ApiTokenClaims } from './services/jwks.service';
-export { FeatureFlagService } from './services/feature-flag.service';
+export { FeatureFlagService, type RequirementVerdict } from './services/feature-flag.service';
+// TBP-756 — why a flag-gated endpoint refused (402 FEATURE_NOT_IN_PLAN,
+// 403 FEATURE_NOT_PERMITTED, 403 FEATURE_OFF).
+export {
+  FeatureNotInPlanException,
+  FeatureForbiddenException,
+  featureRefusalBody,
+  type FeatureRefusalBody,
+  type FeatureRefusalCode,
+  type FeatureOffReason,
+} from './flags/feature-refusal';
 export { BridgeHttpService, BridgeHttpError } from './services/bridge-http.service';
 
 // TBP-341 — Unified backend bridge surface (`bridge.fromJwt(jwt)` → TenantScope).

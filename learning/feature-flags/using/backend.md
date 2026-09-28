@@ -69,10 +69,13 @@ somebody else's user id and `tenant.plan: enterprise` was evaluated as that
 user on that plan (TBP-671). If you proxy requests from a frontend to NestJS,
 you don't need to forward it, and nothing on the backend should read it.
 
-Targeting attributes such as `user.role` and `tenant.plan` come from your own
-verified sources (the user's JWT, your own record of the workspace, which the
-API calls a *tenant*) through an attribute provider. See
-[Target by plan or role](/feature-flags/targeting/by-plan-or-role/).
+Targeting attributes come from verified sources only, with no wiring:
+`user.role`, `privileges`, `user.id`, `user.email`, `tenant.id` and
+`tenant.plan` from the token `BridgeAuthGuard` verified, and the workspace's
+`bridge:billing.plan` and `bridge:billing.entitlement.<feature>` from Bridge
+(with `BridgeModule` loaded). A rule on any of them gives the same answer as
+in the browser. See
+[Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/).
 App-specific facts your server knows (a project count, a region) go in
 per-call `attributes`; see
 [Send context from your backend](/feature-flags/targeting/send-context/).

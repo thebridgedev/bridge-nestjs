@@ -98,6 +98,8 @@ An entitlement is a yes/no a plan grants. There is no separate setting for one:
 
 At the lowest level, `bridge.fromRequest(req).usage` has `quota(metric)`, `report(metric, n, key)` and `set(metric, count)` — see [BridgeService](../bridge-service/bridge-service.md).
 
-## Usage reported from a browser
+## Count once, where the action happens
 
-Bridge's frontend plugins can also report usage themselves (`bridge.usage.report()` / `bridge.usage.set()` in bridge-svelte), for apps with no backend. That is self-reported, trusted-client usage: a browser can send any number, so a frontend alone cannot enforce a limit. When the app has this NestJS backend, report and enforce here.
+When the click calls this backend, the handler counts it — `@RequireQuota` / `@SyncQuota` above — and the frontend only shows the number. When an action never reaches a server (a local-first or mobile app), Bridge's frontend plugins count it themselves (`bridge.usage.report()` / `bridge.usage.set()` in bridge-svelte); that is first-class, and it trusts the browser.
+
+Never both: the same action would be counted twice. Outside production (`NODE_ENV` is not `production`), every response from a counting endpoint — a 2xx or the `402` refusal — carries `X-Bridge-Usage-Counted: <metric>` (and adds it to `Access-Control-Expose-Headers`), and bridge-svelte warns once in the browser console, in development, when the page also reports that metric. In production the header is never sent.

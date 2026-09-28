@@ -290,10 +290,10 @@ BridgeFlagsModule.forRoot({
 **2. Per-request context, via `BridgeContextInterceptor`** — this is the mechanism for user-scoped evals. Registered as an `APP_INTERCEPTOR` in Step 1, it runs on every request and:
 
 - takes `identity` from the **verified** caller only: `req.bridgeUser.id` (set by `BridgeAuthGuard`), then `req.user.id` (your own server-side auth);
-- sets no attributes — targeting attributes come from attribute providers reading verified claims, or per-call `attributes`;
+- fills the targeting attributes from verified sources only (TBP-757): `user.id` `user.role` `user.email` `tenant.id` `tenant.plan` `privileges` from the token `BridgeAuthGuard` verified, plus the workspace's `bridge:billing.plan` `bridge:billing.subscription.status` `bridge:billing.trial` `bridge:billing.entitlement.<feature>` from Bridge when `BridgeModule` is loaded (cached per workspace, refreshed on a newer token or after 30 s; `bridge:billing.quota.*` is browser-only for now);
 - stores the result at `req.bridgeFlagsContext` (`undefined` when there is no verified user → anonymous evaluation), and puts the raw `BridgeFlags` instance at `req.bridgeFlags` so `@Flag(...)` can reach it.
 
-`BridgeFlagGuard` and `@Flag` build the same verified context themselves, so a signed-in user buckets identically in the browser and on the server.
+`BridgeFlagGuard` and `@Flag` build the same verified context themselves, so a signed-in user buckets identically in the browser and on the server, and a rule on a privilege, role, plan or plan feature gives the same answer on both. Outside a request pipeline, `await resolvedFlagContext(req, bridgeService)` (flags barrel) builds it.
 
 **The `x-bridge-context` header is internal and never trusted from clients.** The SDK does not read it (TBP-671): any client can send one, and trusting it let a request evaluate as another user on another plan. Do not deserialize it yourself, and do not forward it from a proxy.
 
@@ -305,7 +305,7 @@ this.flags.flag('new-pipeline', false, { identity: tenantId });               //
 this.flags.flag('worker-v2', false, { attributes: { queue: 'billing' } });    // system-level
 ```
 
-**Security rule:** never evaluate with client-sent identity or attributes — **never trust a client-sent `user.role` / `tenant.plan`.** If your rules target those, populate them yourself from verified JWT claims (an attribute provider, or per-call `attributes` read from `req.bridgeUser`). This SDK does **not** auto-register `AuthAttributeProvider`; nothing wires your JWT into the eval context for you.
+**Security rule:** never evaluate with client-sent identity or attributes — **never trust a client-sent `user.role` / `tenant.plan`.** The SDK already fills those from the verified token and from Bridge; do not add an `AuthAttributeProvider` or copy them into per-call `attributes` (per-call keys win on collision, so a client value there would override the verified one). When writing a rule on who someone is, prefer `privileges contains "<PRIVILEGE>"` over `user.role eq "<ROLE>"`; for a feature a plan sells, target `bridge:billing.entitlement.<feature>`.
 
 ## How server-side evaluation actually works
 
