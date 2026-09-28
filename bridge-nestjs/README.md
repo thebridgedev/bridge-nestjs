@@ -168,8 +168,14 @@ plan sells, target the plan's feature. See
 
 **`@RequireFeatureFlag`** — evaluated on demand over the Bridge API by `FeatureFlagService` (with a
 5-minute in-memory cache). No live updates. Use it for simple route gating or occasional checks when you
-don't want to run a flags client. It resolves `user.role` and `tenant.plan` but not `privileges` or
-`bridge:billing.*` yet, so use `@RequireFlag` for rules on those.
+don't want to run a flags client. Bridge resolves `user.role`, `privileges`, `tenant.plan` and the
+workspace's `bridge:billing.plan`, status, trial and `bridge:billing.entitlement.<feature>` for it, so
+role, privilege, plan and plan-feature rules work here too (plan-limit numbers, `bridge:billing.quota.*`,
+need `@RequireFlag`).
+
+Both flag paths say why they refused: `402 FEATURE_NOT_IN_PLAN` when an upgrade alone would turn the
+feature on (with `fix` = where to upgrade), `403 FEATURE_NOT_PERMITTED` for a role or privilege reason,
+and `403 FEATURE_OFF` otherwise. Each body names the `flag`.
 
 ```typescript
 import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';

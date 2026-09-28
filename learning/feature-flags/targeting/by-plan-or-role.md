@@ -123,7 +123,9 @@ collision, so don't pass client input there either.
 
 The main `@nebulr-group/bridge-nestjs` entry point also ships
 `@RequireFeatureFlag` / `FeatureFlagService`, which asks Bridge's API to
-evaluate each flag from the caller's access token. It resolves `user.role`,
-`user.email`, `tenant.id` and `tenant.plan`, but not `privileges` or
-`bridge:billing.*` yet. For new code, use `@RequireFlag`. See
+evaluate each flag from the caller's access token. Bridge resolves the same
+attributes there: `user.role`, `privileges`, `tenant.plan` and the other token
+attributes, plus the workspace's `bridge:billing.plan`, subscription status,
+trial and `bridge:billing.entitlement.<feature>` (not the plan-limit numbers,
+`bridge:billing.quota.*`). For new code, use `@RequireFlag`. See
 [Gate features by role or privilege](/auth/roles/gate-with-flags/).

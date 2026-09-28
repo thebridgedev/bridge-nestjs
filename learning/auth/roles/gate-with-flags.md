@@ -47,7 +47,7 @@ A bare `this.flags.flag('beta_reports', false, { identity: userId })` sees only 
 
 ## `@RequireFeatureFlag` / `FeatureFlagService`: the older path
 
-`FeatureFlagService` sends the caller's access token to Bridge's API (`/flags/evaluate` or `/flags/bulkEvaluate`) and Bridge evaluates the flag there. It resolves `user.role`, `user.email`, `tenant.id` and `tenant.plan` from the token. It does **not** resolve `privileges` or `bridge:billing.*` yet, so a privilege rule or a plan-feature rule doesn't match on this path:
+`FeatureFlagService` sends the caller's access token to Bridge's API (`/flags/evaluate` or `/flags/bulkEvaluate`) and Bridge evaluates the flag there. Bridge resolves `user.role`, `privileges`, `user.email`, `tenant.id` and `tenant.plan` from the token, and the workspace's `bridge:billing.plan`, `bridge:billing.subscription.status`, `bridge:billing.trial` and `bridge:billing.entitlement.<feature>` from its own billing records, so role, privilege, plan and plan-feature rules give the same answer here as in the browser. Plan-limit numbers (`bridge:billing.quota.*`) are not resolved on this path. A refusal says why: `402 FEATURE_NOT_IN_PLAN`, `403 FEATURE_NOT_PERMITTED` or `403 FEATURE_OFF`, as for `@RequireFlag`.
 
 ```typescript
 import { Controller, Get } from '@nestjs/common';
@@ -56,12 +56,12 @@ import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 @Controller('reports')
 export class ReportsController {
   @Get('beta')
-  @RequireFeatureFlag('beta_reports') // role rules work here; privilege rules don't yet
+  @RequireFeatureFlag('beta_reports') // role, privilege, plan and plan-feature rules all work
   getBetaReports() { /* … */ }
 }
 ```
 
 ## Which one to reach for
 
-- New flag-gated code, or any rule on a privilege or a plan feature: `@RequireFlag` / `BridgeFlagsService`. It evaluates in-process with no network round-trip per check and supports non-boolean values.
-- Existing `@RequireFeatureFlag` code with role rules keeps working; move it to `@RequireFlag` when a rule needs a privilege or a plan feature.
+- New flag-gated code: `@RequireFlag` / `BridgeFlagsService`. It evaluates in-process with no network round-trip per check, updates live, and supports non-boolean values and rules on plan-limit numbers.
+- Existing `@RequireFeatureFlag` code keeps working, with role, privilege, plan and plan-feature rules alike.
