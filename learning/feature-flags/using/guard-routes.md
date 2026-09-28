@@ -25,9 +25,27 @@ export class ExportsController {
 }
 ```
 
-When the flag is off, the guard throws a `ForbiddenException`: the caller gets
-a `403` with `Feature flag 'exports_enabled' is not enabled` and your handler
-never runs. A handler with no `@RequireFlag` passes the guard untouched.
+When the flag is off, the guard refuses and your handler never runs. The
+answer says why, so the frontend can react to it:
+
+| Why the flag is off | Status | `code` | `fix` |
+|---|---|---|---|
+| The workspace's plan doesn't include it: an upgrade alone would turn it on | `402` | `FEATURE_NOT_IN_PLAN` | where to upgrade (`manageRoute`, default `/subscription`) |
+| The person's role or privileges keep it off | `403` | `FEATURE_NOT_PERMITTED` | ask a workspace admin |
+| Switched off, another condition, or outside the rollout | `403` | `FEATURE_OFF` | none |
+
+```json
+{ "statusCode": 402, "code": "FEATURE_NOT_IN_PLAN", "flag": "exports_enabled",
+  "feature": "exports", "reason": "plan", "fix": "/subscription",
+  "message": "Your plan does not include 'exports'. Upgrade to use it." }
+```
+
+`feature` is there when the flag's rule targets a plan feature
+(`bridge:billing.entitlement.<feature>`). The 403s are still
+`ForbiddenException`s and keep the old `message`
+(`Feature flag 'exports_enabled' is not enabled`). The Svelte plugin opens its
+upgrade dialog on a `402 FEATURE_NOT_IN_PLAN`, as it does for a plan limit.
+A handler with no `@RequireFlag` passes the guard untouched.
 
 ## Gate on a specific value
 
@@ -48,7 +66,7 @@ unconfigured or Bridge is unreachable.
 ## Kill switches: skip instead of reject
 
 `options.optional: true` makes the guard *skip* the handler instead of
-throwing the flag-specific `403`. This is the pattern for a kill switch that
+refusing with the flag-specific `402` / `403`. This is the pattern for a kill switch that
 should quietly disable a route rather than surface a flag error:
 
 ```typescript

@@ -55,6 +55,12 @@ export interface BridgeFlagsModuleOptions {
    * refuse to bucket rolled-out rules without an explicit identity.
    */
   mode?: BridgeFlagsMode;
+  /**
+   * TBP-756 — where a `402 FEATURE_NOT_IN_PLAN` refusal from `@RequireFlag`
+   * points to upgrade. Default `/subscription` (the same default as
+   * `billing.manageRoute` on `BridgeModule`).
+   */
+  manageRoute?: string;
   /** Stable server-instance ID, for system-level flags (TBP-172). */
   serverInstanceId?: string;
   /** Initial eval context (e.g. `{ attributes: { region: 'eu' } }`). */

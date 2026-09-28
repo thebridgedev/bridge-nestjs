@@ -28,6 +28,7 @@ import { BridgeService } from '../bridge/bridge.service';
 import { rememberVerifiedUserToken } from '../bridge/verified-request';
 import type { JwtClaims } from '../types/user';
 import { BridgeFlagGuard } from './flag.guard';
+import { FeatureNotInPlanException } from './feature-refusal';
 import { BridgeContextInterceptor } from './flag.interceptor';
 import { REQUIRE_FLAG_KEY } from './flag.decorator';
 import { BridgeFlagsModule } from './flags.module';
@@ -276,7 +277,8 @@ async function verdict(guard: BridgeFlagGuard, req: any, key: string): Promise<'
   try {
     return (await guard.canActivate(httpContext(req, key))) ? 'pass' : 'forbidden';
   } catch (err) {
-    if (err instanceof ForbiddenException) return 'forbidden';
+    // TBP-756: a plan-gated refusal is a 402, a role/off one a 403 — both refuse.
+    if (err instanceof ForbiddenException || err instanceof FeatureNotInPlanException) return 'forbidden';
     throw err;
   }
 }

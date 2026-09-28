@@ -21,7 +21,6 @@
 import {
   CanActivate,
   ExecutionContext,
-  ForbiddenException,
   Inject,
   Injectable,
   Optional,
@@ -30,7 +29,13 @@ import { Reflector } from '@nestjs/core';
 
 import { REQUIRE_FLAG_KEY, type RequireFlagMetadata } from './flag.decorator';
 import { BridgeFlagsService } from './flags.service';
-import { BRIDGE_FLAG_ATTRIBUTE_SOURCE, type FlagAttributeSource } from './flags.tokens';
+import {
+  BRIDGE_FLAG_ATTRIBUTE_SOURCE,
+  BRIDGE_FLAGS_OPTIONS,
+  type BridgeFlagsModuleOptions,
+  type FlagAttributeSource,
+} from './flags.tokens';
+import { featureRefusal, readExplanation } from './feature-refusal';
 import { rememberResolvedFlagContext, resolvedFlagContext } from './request-context';
 
 @Injectable()
@@ -41,6 +46,9 @@ export class BridgeFlagGuard implements CanActivate {
     @Optional()
     @Inject(BRIDGE_FLAG_ATTRIBUTE_SOURCE)
     private readonly attributeSource?: FlagAttributeSource,
+    @Optional()
+    @Inject(BRIDGE_FLAGS_OPTIONS)
+    private readonly options?: BridgeFlagsModuleOptions,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -58,7 +66,8 @@ export class BridgeFlagGuard implements CanActivate {
     }
     const evalContext = await resolvedFlagContext(req, this.attributeSource);
     rememberResolvedFlagContext(req, evalContext);
-    const value = this.flags.flag(meta.key, meta.defaultValue, evalContext);
+    const result = this.flags.evaluate(meta.key, meta.defaultValue, evalContext);
+    const value = result.value;
 
     const expected = meta.options.equals === undefined ? true : meta.options.equals;
     const passes = isEqual(value, expected) || (!!value && expected === true);
@@ -70,11 +79,9 @@ export class BridgeFlagGuard implements CanActivate {
       return false;
     }
 
-    throw new ForbiddenException({
-      statusCode: 403,
-      error: 'Forbidden',
-      message: `Feature flag '${meta.key}' is not enabled`,
-    });
+    // TBP-756 — 402 when an upgrade alone would turn it on, 403 otherwise,
+    // naming the flag and the fix.
+    throw featureRefusal(meta.key, readExplanation(result), this.options?.manageRoute);
   }
 }
 

@@ -20,6 +20,7 @@ import { lastValueFrom, of } from 'rxjs';
 import { BridgeFlagsModule } from './flags.module';
 import { BridgeFlagsService } from './flags.service';
 import { BridgeFlagGuard } from './flag.guard';
+import { FeatureNotInPlanException } from './feature-refusal';
 import { BridgeContextInterceptor } from './flag.interceptor';
 import { Flag, REQUIRE_FLAG_KEY } from './flag.decorator';
 
@@ -145,7 +146,8 @@ describe('TBP-671 — x-bridge-context is never trusted', () => {
       try {
         allowed = await guard.canActivate(ctx);
       } catch (err) {
-        if (!(err instanceof ForbiddenException)) throw err;
+        // TBP-756: a plan-gated refusal is a 402, a role/off one a 403 — both refuse.
+        if (!(err instanceof ForbiddenException || err instanceof FeatureNotInPlanException)) throw err;
         allowed = 'forbidden';
       }
     }
