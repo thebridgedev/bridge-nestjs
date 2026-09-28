@@ -60,7 +60,7 @@ this.flags.bridge.registerAttributeProvider(
 );
 ```
 
-Once registered, a rule against `bridge:user.role` or `bridge:tenant.plan` resolves the same way it would if it had been decoded automatically. The difference from the frontend (and from the legacy flag path above) is that here *you* wired the provider in, rather than it being implicit. This also means it's on you to make sure `getClaims()` reads from a verified source (`req.bridgeUser`/`req.bridgeApiToken`, set by `BridgeAuthGuard`) and never from anything client-supplied: the same "never trust client-sent role/plan attributes" rule called out in [Feature Flags](/feature-flags/#bridge-managed-attributes) applies here.
+Once registered, a rule against `user.role` or `tenant.plan` resolves the same way it would if it had been decoded automatically. The difference from the frontend (and from the legacy flag path above) is that here *you* wired the provider in, rather than it being implicit. This also means it's on you to make sure `getClaims()` reads from a verified source (`req.bridgeUser`/`req.bridgeApiToken`, set by `BridgeAuthGuard`) and never from anything client-supplied: the same "never trust client-sent role/plan attributes" rule called out in [Feature Flags](/feature-flags/#bridge-managed-attributes) applies here.
 
 **Gating a whole route on a flag**, independent of whether the flag's rule references role at all:
 
