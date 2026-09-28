@@ -158,9 +158,18 @@ home(@Flag({ key: 'show_new_home', defaultValue: false }) showNew: boolean) {
 }
 ```
 
+A flag rule on a privilege, role, plan or plan feature works here the same as in the browser, with no
+wiring: on a request `BridgeAuthGuard` verified, the guard and `@Flag` fill in `privileges`, `user.role`,
+`tenant.plan` and the other token attributes, plus the workspace's `bridge:billing.plan` and
+`bridge:billing.entitlement.<feature>` (read from Bridge, cached per workspace) when `BridgeModule` is
+loaded. Client-sent values are never used. Prefer a privilege rule over a role rule, and for a feature a
+plan sells, target the plan's feature. See
+[Target by plan, privilege or role](../learning/feature-flags/targeting/by-plan-or-role.md).
+
 **`@RequireFeatureFlag`** — evaluated on demand over the Bridge API by `FeatureFlagService` (with a
 5-minute in-memory cache). No live updates. Use it for simple route gating or occasional checks when you
-don't want to run a flags client.
+don't want to run a flags client. It resolves `user.role` and `tenant.plan` but not `privileges` or
+`bridge:billing.*` yet, so use `@RequireFlag` for rules on those.
 
 ```typescript
 import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
