@@ -99,18 +99,9 @@ Auth type rejection (e.g., API token sent to a `@AcceptAuth('jwt')` endpoint):
 
 ### 403 Forbidden
 
-Returned when authenticated but lacking required role, privilege, or feature flag:
+Returned when authenticated but an API token lacks the scope `@RequirePrivilege` asks for (API tokens only), or a flag is off for the caller:
 
-**Role check failed:**
-```json
-{
-  "statusCode": 403,
-  "error": "Forbidden",
-  "message": "Role 'ADMIN' required"
-}
-```
-
-**Privilege check failed:**
+**API-token privilege check failed:**
 ```json
 {
   "statusCode": 403,

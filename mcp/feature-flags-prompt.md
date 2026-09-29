@@ -4,6 +4,18 @@ You are adding **Feature Flags** to a NestJS application that uses The Bridge. T
 
 On a backend there is no demo page to look at. The equivalent proof is a **guarded route whose HTTP status changes when you flip the flag**, so that is what this prompt builds.
 
+## The one rule for app code
+
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+
+Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
+
+Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+
+In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+
+Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "USER_WRITE"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+
 ## Decide first — which surface do you need?
 
 Two unrelated decisions live in this prompt. Don't mix them up.
@@ -180,7 +192,7 @@ A rule is **branches + otherwiseValue + rolloutPct**, first match wins:
 ```jsonc
 {
   "branches": [
-    { "conditions": [ { "attribute": "tenant.plan", "operator": "in", "values": ["pro", "enterprise"] } ],
+    { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise_export", "operator": "eq", "values": [true] } ],
       "returnValue": true }
   ],
   "otherwiseValue": false,
@@ -190,7 +202,7 @@ A rule is **branches + otherwiseValue + rolloutPct**, first match wins:
 
 - Conditions inside one branch are AND-ed; add more branches for OR / different return values.
 - Operators: `eq` `neq` `contains` `not_contains` `in` `not_in` `gt` `lt` `between` `regex` `exists` `not_exists` (numeric and date operators only apply to those attribute types).
-- `attribute` is a dotted path into the eval context (next step). With Bridge Auth, `user.id` `user.role` `user.email` `tenant.id` `tenant.plan` are the canonical paths.
+- `attribute` is a dotted path into the eval context (next step). With Bridge Auth, `user.id` `user.email` `tenant.id` `privileges` and `bridge:billing.entitlement.<feature>` are the ones gates are ruled on: a privilege for who someone is, a plan feature (listed on the plans that sell it with `bridge plan feature add <plan> <feature>`) for what their plan buys. Never rule on a plan's name.
 - **`rolloutPct` below 100 requires an identity** on the eval context — bucketing is `hash(flagKey + identity) mod 100`. With no identity the SDK refuses to bucket and returns the safe value rather than randomizing per call.
 
 ### Where to configure it — MCP, CLI, or dashboard
@@ -216,7 +228,7 @@ Creating the flag from the rule above, in either channel:
   "state": "on-with-rule",
   "rule": {
     "branches": [
-      { "conditions": [ { "attribute": "tenant.plan", "operator": "in", "values": ["pro", "enterprise"] } ],
+      { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise_export", "operator": "eq", "values": [true] } ],
         "returnValue": true }
     ],
     "otherwiseValue": false,
@@ -228,7 +240,7 @@ Creating the flag from the rule above, in either channel:
 ```bash
 # CLI — same flag
 bridge flag create --key enterprise-export --value-type boolean --state on-with-rule \
-  --rule '{"branches":[{"conditions":[{"attribute":"tenant.plan","operator":"in","values":["pro","enterprise"]}],"returnValue":true}],"otherwiseValue":false,"rolloutPct":100}'
+  --rule '{"branches":[{"conditions":[{"attribute":"bridge:billing.entitlement.enterprise_export","operator":"eq","values":[true]}],"returnValue":true}],"otherwiseValue":false,"rolloutPct":100}'
 ```
 
 **Flipping a flag on or off**, without touching its rule — the channels differ here, and it costs you a round-trip:
@@ -257,8 +269,8 @@ Inspect current state with `list_feature_flags` (MCP) or `bridge flag list` / `b
 | Bulk export / import | `export_feature_flags`, `import_feature_flags` | `bridge flag export`, `bridge flag import` |
 
 ```bash
-bridge flag eval enterprise-export --identity user-123 --attribute tenant.plan=pro   # → true
-bridge flag eval enterprise-export --identity user-123 --attribute tenant.plan=free  # → false
+bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=true   # → true
+bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=false  # → false
 ```
 
 `evaluate_feature_flag` takes `key`, `identity` and `attributes` and runs the live config through the same evaluator the server and the SDKs use, so its verdict is what the app would see. Writing nothing, it is the cheap way to check targeting before you ship code that depends on it. A rule with `rolloutPct < 100` needs an `identity` to bucket on.
@@ -351,7 +363,7 @@ Also not supported: there is no `refresh()` on `BridgeFlagsService`, and no auto
 5. **Flip it on.** `toggle_feature_flag { key: 'demo-flag', enabled: true }` (MCP), or `bridge flag toggle --id <id> --enabled true` / `bridge flag update --id <id> --state on` with the id from step 4 (CLI). Dashboard only if you have neither.
 6. **Observe the change.** Re-run the same two curls: **200**, and `{"demo-flag":true}` — with no redeploy and no restart, because the change arrived over the channel.
 7. **Flip it back off** and confirm both revert.
-8. **Targeting (if you wrote a rule).** Dry-run it: `evaluate_feature_flag { key, identity: 'user-123', attributes: { 'tenant.plan': 'pro' } }` over MCP, or `bridge flag eval <key> --identity user-123 --attribute tenant.plan=pro` on the CLI. Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
+8. **Targeting (if you wrote a rule).** Dry-run it: `evaluate_feature_flag { key, identity: 'user-123', attributes: { 'bridge:billing.entitlement.enterprise_export': true } }` over MCP, or `bridge flag eval <key> --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=true` on the CLI. Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
 
 ---
 

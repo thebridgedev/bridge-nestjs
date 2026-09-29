@@ -96,11 +96,10 @@ export class ItemsController {
 3. **No matching rule + `defaultAccess: 'public'`**: allowed.
 4. **Credential verification**: a user JWT on `Authorization: Bearer` is verified locally against Bridge's JWKS keyset; an API token on `x-api-key` is verified by introspection (a POST to the Bridge, which checks the token's signature and backing record). At least one valid credential is required past this point, or the request gets a `401`.
 5. **`@RequirePrivilege()`**: enforced against the API token's privileges, when an API token is present.
-6. **Route-rule privilege** (anything beyond `ANONYMOUS`/`AUTHENTICATED`): enforced against the user JWT's privileges, when a user JWT is present.
-7. **`@RequireRole()`**: enforced against the user JWT's role.
-8. **`@RequireFeatureFlag()`**: enforced by evaluating the flag against the user's access token.
+6. **`@RequireFeatureFlag()`**: enforced by evaluating the flag against the user's access token.
+7. **Route-rule `featureFlag`**: the matching rule's flag, evaluated the same way.
 
-Role, privilege-decorator, and feature-flag checks only run once a credential of the relevant type has been verified; see [Roles & Privileges](/auth/roles/how-it-works/) and [API tokens](/auth/api-tokens/) for exactly which credential each check applies to.
+`@RequirePrivilege()` is API tokens only; flags gate a signed-in person. Each check runs once a credential of the relevant type has been verified; see [Roles & Privileges](/auth/roles/how-it-works/) and [API tokens](/auth/api-tokens/) for exactly which credential each check applies to.
 
 ## Centralized route rules
 
@@ -115,10 +114,10 @@ BridgeModule.forRoot({
     rules: [
       { path: '/health', privilege: 'ANONYMOUS' },
       { path: '/api/status', privilege: 'AUTHENTICATED' },
-      { path: '/users/*', privilege: 'USER_READ' },
-      { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
-      { graphqlOperation: 'listUsers', privilege: 'USER_READ' },
-      { graphqlOperation: 'deleteUser', privilege: 'USER_WRITE' },
+      { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' },
+      { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
     ],
   },
 })
@@ -128,9 +127,9 @@ BridgeModule.forRoot({
 |---|---|---|
 | `path` | `string` | REST URL wildcard pattern, e.g. `/account/subscription/**`. Matched against the request path only (not method). |
 | `graphqlOperation` | `string` | GraphQL operation name, case-sensitive camelCase, e.g. `listUsers`. |
-| `privilege` | `RoutePrivilege` (required) | `'ANONYMOUS'`, `'AUTHENTICATED'`, one of the built-in privilege strings, or any custom string that must appear in the user JWT's `privileges` claim. |
-| `plans` | `string[]` | Present on the type for a future plan-restriction feature. **Not currently enforced by `BridgeAuthGuard`**; don't rely on it to gate access yet. |
+| `privilege` | `'ANONYMOUS' \| 'AUTHENTICATED'` (required) | Whether the route needs a signed-in caller. |
+| `featureFlag` | `string \| { any } \| { all }` | The flag that decides who gets the route; its rule says why (e.g. `privileges contains "USER_WRITE"`). |
 
 Rules are matched in order; the first match wins. GraphQL requests are matched only against `graphqlOperation` rules, REST requests only against `path` rules; provide the field that applies.
 
-**Roles and feature flags are not part of route rules.** They're decorator-only (`@RequireRole()`, `@RequireFeatureFlag()`). Route rules cover privilege-gating and public/anonymous access; see [Configuration](/auth/config/) for the full `RouteRule` / `GuardConfig` reference.
+**Who gets a route is a flag**, set as `featureFlag` here or `@RequireFeatureFlag()` on the handler. A rule that still carries a privilege key or the removed `plans` / `entitlement` / `role` options stops the app at startup with an error naming the flag setup to use. See [Configuration](/auth/config/) for the full `RouteRule` / `GuardConfig` reference.

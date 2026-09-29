@@ -29,7 +29,7 @@ bridge user update --user-id <userId> --role ADMIN --tenant-id <tenantId>
 
 ```typescript
 import { Controller, Post, Body, Req } from '@nestjs/common';
-import { RequireRole, RequirePrivilege, BridgeHttpService } from '@nebulr-group/bridge-nestjs';
+import { RequireFeatureFlag, RequirePrivilege, BridgeHttpService } from '@nebulr-group/bridge-nestjs';
 import { Request } from 'express';
 
 @Controller('admin/team')
@@ -37,8 +37,8 @@ export class TeamAdminController {
   constructor(private readonly bridgeHttpService: BridgeHttpService) {}
 
   @Post('update-role')
-  @RequireRole('ADMIN')       // gate for signed-in admins calling this endpoint
-  @RequirePrivilege('USER_WRITE') // gate for any API-token caller
+  @RequireFeatureFlag('manage-team') // people: flag ruled privileges contains "USER_WRITE"
+  @RequirePrivilege('USER_WRITE')    // API tokens only: the token's scope
   async updateRole(
     @Body() body: { userId: string; role: string; tenantId: string },
     @Req() req: Request,

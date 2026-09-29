@@ -7,20 +7,16 @@ export type FeatureFlagRequirement =
   | { all: string[] };
 
 /**
- * Privilege levels used to protect routes.
- * ANONYMOUS  — no authentication required
- * AUTHENTICATED — any valid JWT (user or API token)
- * USER_READ / USER_WRITE / TENANT_READ / TENANT_WRITE — specific privilege strings
- * that must appear in the user JWT's `privileges` claim.
+ * Who may reach a route at all.
+ * ANONYMOUS     — no authentication required
+ * AUTHENTICATED — any valid credential (user JWT or API token)
+ *
+ * Anything finer than "signed in" is a flag: set `featureFlag` on the rule
+ * and give the flag a rule on a privilege (`privileges contains "USER_WRITE"`),
+ * a plan feature (`bridge:billing.entitlement.<key> eq true`) or a rollout.
+ * An API token's scope is `@RequirePrivilege` on the handler (API tokens only).
  */
-export type RoutePrivilege =
-  | 'ANONYMOUS'
-  | 'AUTHENTICATED'
-  | 'USER_READ'
-  | 'USER_WRITE'
-  | 'TENANT_READ'
-  | 'TENANT_WRITE'
-  | string;
+export type RoutePrivilege = 'ANONYMOUS' | 'AUTHENTICATED';
 
 /**
  * Route rule for centralized guard configuration.
@@ -31,44 +27,14 @@ export interface RouteRule {
   path?: string;
   /** GraphQL operation name, case-sensitive camelCase (e.g. "listUsers") */
   graphqlOperation?: string;
-  /** Required privilege level for this route */
+  /** Whether the route needs a signed-in caller: 'ANONYMOUS' or 'AUTHENTICATED'. */
   privilege: RoutePrivilege;
   /**
-   * Optional plan restriction (TBP-472). The tenant's subscription plan slug
-   * must be in this list, otherwise the request is denied with 402 Payment
-   * Required (`reason: 'plan_required'`). Fail-closed: if the plan cannot be
-   * resolved the request is denied.
-   *
-   * ⚠ This gates on the **canonical Billing 2.0 subscription**, resolved via
-   * `bridge.fromJwt(jwt).subscription.plan.slug`. That is a different system
-   * from the per-app `tenant.plan` and from the JWT `plan` claim, and its
-   * slugs are global rather than app-scoped.
-   *
-   * A workspace with no canonical subscription — for example one created
-   * before the Billing 2.0 rollout — resolves no slug and is denied with 402
-   * `reason: 'plan_unresolved'`, whatever plan it is actually on. If your app
-   * is not on Billing 2.0, `plans:` will reject your entire customer base.
-   *
-   * For per-app plans, gate on `featureFlag` with a `tenant.plan` targeting
-   * rule instead. `privilege`, `featureFlag`, `plans` and `entitlement` sit
-   * side by side here and look interchangeable; they are not (TBP-614).
-   */
-  plans?: string[];
-  /**
-   * Optional entitlement restriction (TBP-472). Each key is checked via
-   * `bridge.fromJwt(jwt).entitlements.can(key)`; the tenant must have ALL
-   * listed entitlements, otherwise 402 Payment Required
-   * (`reason: 'entitlement_missing'`). Fail-closed on resolution error.
-   *
-   * ⚠ Same caveat as `plans` above: entitlements come from the canonical
-   * Billing 2.0 snapshot, so a workspace without one is denied regardless of
-   * what it is entitled to in your app's own model (TBP-614).
-   */
-  entitlement?: string | string[];
-  /**
-   * Optional feature-flag restriction (TBP-472). Evaluated for the request's
-   * user JWT via the same path as `@RequireFeatureFlag`; a disabled flag
-   * denies with 403 Forbidden. Fail-closed on resolution error.
+   * The flag that decides who gets this route (TBP-472). Evaluated for the
+   * request's user JWT via the same path as `@RequireFeatureFlag`; the flag's
+   * rule says why (privilege, plan feature, rollout). Refuses with 402
+   * FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED / 403 FEATURE_OFF.
+   * Fail-closed on resolution error.
    */
   featureFlag?: FeatureFlagRequirement;
 }

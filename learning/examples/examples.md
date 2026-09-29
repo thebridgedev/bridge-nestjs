@@ -29,7 +29,7 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
         rules: [
           { path: '/health', privilege: 'ANONYMOUS' },
           { path: '/webhooks/*', privilege: 'ANONYMOUS' },
-          { path: '/account/users', privilege: 'USER_READ' },
+          { path: '/account/users', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
         ],
       },
     }),
@@ -80,18 +80,23 @@ export class MeController {
 }
 ```
 
-## 3. Role-based access
+## 3. Who gets an endpoint: a flag
+
+Every gate is a flag, and the flag's rule says why. `admin-area` is ruled on a
+privilege, e.g. `privileges contains "USER_WRITE"` (ADMIN and OWNER hold it in
+the default setup; read the app's real roles with `list_roles` /
+`bridge role list`). The code never reads the role.
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireRole } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)
-@RequireRole('ADMIN')          // applies to the whole controller
+@RequireFeatureFlag('admin-area')        // applies to the whole controller
 export class AdminController {
   @Get('settings')
-  @RequireRole('OWNER')        // tighter requirement for this route
+  @RequireFeatureFlag('admin-settings')  // its own flag, e.g. privileges contains "TENANT_WRITE"
   getSettings() { ... }
 }
 ```
@@ -108,7 +113,7 @@ import { BridgeAuthGuard, RequirePrivilege, AcceptAuth } from '@nebulr-group/bri
 @UseGuards(BridgeAuthGuard)
 export class IntegrationUsersController {
   @Get()
-  @RequirePrivilege('USER_READ')   // enforced for API tokens; user JWTs bypass @RequirePrivilege
+  @RequirePrivilege('USER_READ')   // API tokens only: the scope an x-api-key caller must carry
   list() { ... }
 }
 ```
@@ -177,12 +182,17 @@ export class ReportsService {
 }
 ```
 
-## 7. Tenant data: subscription and entitlement gating
+## 7. Tenant data, and a feature a plan sells
+
+The plan feature is gated by a flag: list `pdf-export` on the plans that sell it
+(`bridge plan feature add pro pdf_export`) and rule the flag
+`bridge:billing.entitlement.pdf_export eq true`. A workspace without it gets
+`402 FEATURE_NOT_IN_PLAN` with the upgrade route.
 
 ```typescript
-import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
-import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, BridgeService, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 
 @Controller('reports')
 @UseGuards(BridgeAuthGuard)
@@ -190,13 +200,9 @@ export class ReportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('export')
+  @RequireFeatureFlag('pdf-export')
   async export(@Req() req: Request) {
     const tenant = this.bridge.fromRequest(req); // the token BridgeAuthGuard verified
-
-    if (!(await tenant.entitlements.can('pdf-export'))) {
-      throw new ForbiddenException('Your plan does not include PDF export');
-    }
-
     const sub = await tenant.subscription; // { plan: { slug, name }, status, endsAt?, gateEngaged? }
     return this.buildExport(sub.plan.slug);
   }

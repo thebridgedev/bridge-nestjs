@@ -18,7 +18,8 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
 /**
  * Bridge module for NestJS applications.
  * 
- * Provides authentication, role-based access control, and feature flag support.
+ * Provides authentication, feature flags (every gate is a flag), plan limits
+ * and API-token scopes.
  * 
  * @example
  * ```typescript
@@ -37,9 +38,9 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
  * })
  * export class AppModule {}
  * 
- * // With global guard and route rules.
- * // Central rules express privilege/plan only. Role gating uses @RequireRole
- * // and feature-flag gating uses @RequireFeatureFlag on the controller/route.
+ * // With global guard and route rules. A rule says whether a route needs a
+ * // signed-in caller; who gets it is a flag (`featureFlag`, or
+ * // @RequireFeatureFlag on the handler) whose rule says why.
  * @Module({
  *   imports: [
  *     BridgeModule.forRoot({
@@ -49,8 +50,8 @@ import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
  *         defaultAccess: 'protected',
  *         rules: [
  *           { path: '/health', privilege: 'ANONYMOUS' },
- *           { path: '/account/users', privilege: 'USER_READ' },
- *           { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
+ *           { path: '/account/users', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+ *           { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
  *         ],
  *       },
  *     }),

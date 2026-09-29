@@ -124,7 +124,7 @@ BRIDGE_DEBUG=true
 
 ### Route rules reference
 
-Route rules use the `privilege` field to control access. Roles and feature flags are applied via decorators, **not** in route rules.
+A route rule's `privilege` says whether the route needs a signed-in caller (`'ANONYMOUS'` or `'AUTHENTICATED'`). Who gets the route is a flag: the rule's `featureFlag`, or `@RequireFeatureFlag` on the handler. The flag's rule says why (a privilege such as `privileges contains "USER_WRITE"`, a plan feature, a rollout).
 
 ```typescript
 interface RouteRule {
@@ -134,12 +134,12 @@ interface RouteRule {
   /** GraphQL operation name, case-sensitive camelCase (e.g. "listUsers") */
   graphqlOperation?: string;
 
-  /** Required privilege level for this route */
+  /** Does the route need a signed-in caller? */
   privilege: RoutePrivilege;
 
-  /** Present on the type for a future plan-restriction feature.
-   *  Not currently enforced by BridgeAuthGuard. */
-  plans?: string[];
+  /** Who gets the route — a flag whose rule says why.
+   *  Off → 402 FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED / 403 FEATURE_OFF. */
+  featureFlag?: FeatureFlagRequirement;
 }
 ```
 
@@ -161,31 +161,26 @@ BridgeModule.forRoot({
       // Any valid token (user JWT or API token)
       { path: '/api/status', privilege: 'AUTHENTICATED' },
 
-      // Require specific privilege in JWT
-      { path: '/users/*', privilege: 'USER_READ' },
-      { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
+      // Who gets it is a flag (e.g. `manage-users` ruled `privileges contains "USER_WRITE"`)
+      { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' },
 
       // GraphQL operation rules
-      { graphqlOperation: 'listUsers', privilege: 'USER_READ' },
-      { graphqlOperation: 'deleteUser', privilege: 'USER_WRITE' },
+      { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
     ],
   },
 })
 ```
 
-> The `plans` field on `RouteRule` is not enforced by `BridgeAuthGuard` yet. To gate a route by subscription plan today, check entitlements or the plan programmatically with `BridgeService`; see [Tenant Data (`BridgeService`)](../bridge-service/bridge-service.md).
+> For a feature a plan sells, list it on the plans (`bridge plan feature add <plan> <feature>`) and rule the flag `bridge:billing.entitlement.<feature> eq true`. A rule that passes anything other than `'ANONYMOUS'` / `'AUTHENTICATED'` as `privilege`, or a `plans` / `entitlement` key, stops the app at startup with an error naming the flag setup to use instead.
 
 ### RoutePrivilege type reference
 
 ```typescript
 type RoutePrivilege =
   | 'ANONYMOUS'       // No authentication required
-  | 'AUTHENTICATED'   // Any valid JWT (user or API token)
-  | 'USER_READ'       // Requires USER_READ in JWT privileges claim
-  | 'USER_WRITE'      // Requires USER_WRITE in JWT privileges claim
-  | 'TENANT_READ'     // Requires TENANT_READ in JWT privileges claim
-  | 'TENANT_WRITE'    // Requires TENANT_WRITE in JWT privileges claim
-  | string;           // Any custom privilege string
+  | 'AUTHENTICATED';  // Any valid credential (user JWT or API token)
 ```
 
 ### GuardConfig type reference

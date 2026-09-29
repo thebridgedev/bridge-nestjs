@@ -69,6 +69,11 @@ export interface QuotaSnapshot {
    * only have counters.
    */
   kind?: 'counter' | 'gauge';
+  /**
+   * TBP-763 — `membership`: a gauge Bridge counts itself from the workspace's
+   * active members (seats), so the app passes no count for it.
+   */
+  source?: 'membership';
   /** Per-unit price (metered only). */
   unitAmount?: number;
   currency?: string;

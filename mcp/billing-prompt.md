@@ -2,9 +2,21 @@
 
 You are adding **server-side billing enforcement** to a NestJS application that uses The Bridge.
 
+## The one rule for app code
+
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+
+Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
+
+Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+
+In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+
+## What this guide covers
+
 `bridge guide mechanisms` is the one-page model: the server decides and the client decorates, a POST increments the limit, counter vs gauge in one sentence, and the three ways a frontend shows a limit.
 
-> **What "billing" means on the backend.** A backend plugin **reads** subscription state and **enforces** entitlements — nothing more. There is no checkout, no paywall, no plan-selector, and no Stripe redirect here. Purchasing lives entirely in the **frontend** Bridge plugin (the plan selector + Stripe Checkout) and in **bridge-api** (Stripe webhooks that sync plan/subscription state). This guide covers two things only: (1) reading the current tenant's subscription, and (2) gating server behavior on the tenant's plan and entitlements. Do not add purchasing, checkout URLs, or Stripe client code to the backend. It also documents how to **configure** the plans, prices and quotas you gate on — that is platform configuration done over MCP or the CLI, not code you write into the app.
+> **What "billing" means on the backend.** A backend plugin **reads** subscription state and **enforces** entitlements — nothing more. There is no checkout, no paywall, no plan-selector, and no Stripe redirect here. Purchasing lives entirely in the **frontend** Bridge plugin (the plan selector + Stripe Checkout) and in **bridge-api** (Stripe webhooks that sync plan/subscription state). This guide covers two things only: (1) reading the current tenant's subscription, and (2) gating server behavior on what the tenant's plan sells — through flags ruled on plan features, and quotas for the numbers. Do not add purchasing, checkout URLs, or Stripe client code to the backend. It also documents how to **configure** the plans, prices and quotas you gate on — that is platform configuration done over MCP or the CLI, not code you write into the app.
 
 Team/workspace management is likewise out of scope — the backend surface is read-only and exposes no team CRUD. Member management is driven from the frontend plugin and bridge-api.
 
@@ -16,10 +28,8 @@ Three unrelated jobs land in this one guide, on three different surfaces. Confus
 |---|---|
 | Enforce a plan limit on the handler that creates the thing | `@RequireQuota(metric)` — see **Plan limits** |
 | Keep a count of things that exist in step after a delete | `@SyncQuota(metric, { current })` |
-| Refuse a handler unless the tenant's plan includes a capability | `@RequireEntitlement(key)` |
-| Refuse a whole path unless the tenant is on a plan | `plans: [...]` on a route rule in `BridgeModule.forRoot()` |
-| Refuse a whole path unless the tenant holds an entitlement | `entitlement: '…'` on that same route rule |
-| Gate one capability from a service or a worker | `BridgeQuotaService.assertEntitlement(req, key)` / `bridge.fromRequest(req).entitlements.can(key)` |
+| Refuse a handler unless the tenant's plan includes a feature | `@RequireFeatureFlag('<feature>')`, the flag ruled `bridge:billing.entitlement.<feature> eq true` — see **Plan features are flags** |
+| Refuse a whole path unless the plan includes a feature | `featureFlag: '<feature>'` on a route rule in `BridgeModule.forRoot()`, same flag rule |
 | Read the tenant's plan, status, user or branding | `bridge.fromRequest(req).subscription` / `.user` / `.branding` |
 | Check or record a limit by hand (bulk jobs, mid-handler) | `BridgeQuotaService` — `assertQuota`, `check`, `record`, `sync` |
 | Meter usage, or read the live quota, at the lowest level | `tenant.usage.report(metric, n, key)` / `tenant.usage.set(metric, count)` / `tenant.usage.quota(metric)` |
@@ -27,13 +37,13 @@ Three unrelated jobs land in this one guide, on three different surfaces. Confus
 | Connect Stripe so any of it bills | **Not code.** `connect_stripe` / `setup_payments` (MCP) or `bridge stripe connect` (CLI) |
 | Sell something — checkout, plan selector, Stripe redirect | **Not here at all.** Frontend plugin + bridge-api |
 
-**Prefer an entitlement key to a plan slug.** `plans:` gates on the canonical Billing 2.0 subscription: a workspace with no canonical subscription resolves no slug and is denied 402 whatever plan it is actually on, so on an app not yet migrated to Billing 2.0 a `plans:` rule rejects your entire customer base (TBP-614). Entitlement keys also survive a plan rename; slugs do not. For a per-app plan, gate on a feature flag with a `tenant.plan` rule instead — see `feature-flags-prompt.md`.
+**Gate on what a plan sells, never on the plan's name.** List the feature on the plans that sell it (`bridge plan feature add <plan> <feature>`) and rule the flag on `bridge:billing.entitlement.<feature> eq true`. A feature key survives a plan rename and a new plan; a plan name does not.
 
 ## Prerequisites
 
 1. `@nebulr-group/bridge-nestjs` installed and `BridgeModule.forRoot()` registered (see `integration-prompt.md`).
 2. Plans and Stripe are already configured on the Bridge app (done in the frontend/master billing flow). Confirm with `list_plans` (MCP) or `bridge plan list` (CLI) — at least one plan should exist.
-3. Routes are protected — entitlement gating runs on a verified user JWT, so the caller must be authenticated.
+3. Routes are protected — flags and quotas are evaluated for a verified user JWT, so the caller must be authenticated.
 
 > **Check Stripe is connected before configuring anything.** If it isn't, nothing you configure will bill.
 >
@@ -98,7 +108,7 @@ import { Body, Controller, Delete, Param, Post } from '@nestjs/common';
 import {
   BridgeTenant,
   CurrentTenant,
-  RequireEntitlement,
+  RequireFeatureFlag,
   RequireQuota,
   SyncQuota,
 } from '@nebulr-group/bridge-nestjs';
@@ -123,8 +133,10 @@ export class TicketsController {
   }
 
   // Counter: Bridge's tally is compared; one event is reported after a 2xx.
+  // Who may export is a flag (rule: bridge:billing.entitlement.data_export eq true);
+  // how many is the quota.
   @Post(':id/export')
-  @RequireEntitlement('app_active')
+  @RequireFeatureFlag('data_export')
   @RequireQuota('exports')
   export(@Param('id') id: string) {
     return this.tickets.export(id);
@@ -138,11 +150,11 @@ The first argument of `current` is a `QuotaTenant` (exported from `@nebulr-group
 
 **What happens, exactly:**
 
-- **Before the handler:** `@RequireEntitlement` first (403), then the quota (402). A `metered` quota never refuses — past its allowance it bills. A metric with no quota on the plan is unlimited.
+- **Before the handler:** the guard's flag check first (402 `FEATURE_NOT_IN_PLAN` / 403), then the quota (402). A `metered` quota never refuses — past its allowance it bills. A metric with no quota on the plan is unlimited.
 - **After the handler:** only when the response is **2xx**. A handler that throws, or answers 4xx/5xx, records nothing. **Exactly one write** to Bridge per decorated metric: a gauge `PUT` or a counter event.
 - **Idempotency:** a counter is keyed by the request's `Idempotency-Key` header. The same key from the same workspace for the same metric is one event, however often the client retries. Without the header, every successful request counts.
 - **Needs a verified user.** Put the route behind `BridgeAuthGuard` (or the global guard). A `@Public()` route or an API-token-only caller has no workspace and gets 401.
-- **Fail-closed:** if Bridge cannot answer the quota or entitlement read, the request is refused with 503 — never let through unchecked.
+- **Fail-closed:** if Bridge cannot answer the quota read, the request is refused with 503 — never let through unchecked.
 
 **The refusal the frontend reads** — 402 Payment Required:
 
@@ -151,13 +163,13 @@ The first argument of `current` is a `QuotaTenant` (exported from `@nebulr-group
   "metric": "tickets", "used": 5, "limit": 5, "fix": "/subscription" }
 ```
 
-and for an entitlement, 403: `{ "statusCode": 403, "code": "ENTITLEMENT_REQUIRED", "entitlement": "…", "fix": "/subscription", "message": "…" }`. `fix` is your subscription page; change it with `BridgeModule.forRoot({ billing: { manageRoute: '/account/billing' } })`.
+and for a flag whose rule asks for a plan feature the workspace's plan lacks, 402 `FEATURE_NOT_IN_PLAN` naming the flag and the same `fix`. `fix` is your subscription page; change it with `BridgeModule.forRoot({ billing: { manageRoute: '/account/billing' } })`.
 
-> **Every hard quota is also an entitlement** with the same name (dots become `_`), true while `used < limit`. So never pair `@RequireEntitlement('exports')` with `@RequireQuota('exports')`: at the cap it answers 403 before the quota can answer the 402 your frontend knows how to upsell. Use `@RequireEntitlement` for a capability (`app_active`, a feature key), `@RequireQuota` for the limit.
+> **Every hard quota is also an entitlement** with the same name (dots become `_`), true while `used < limit`. So rule a flag on a feature key, never on the metric you also put `@RequireQuota` on: at the cap the flag would refuse before the quota can answer the 402 your frontend knows how to upsell. A flag for who may, `@RequireQuota` for how many.
 
-> **Seats** (`users`) are a gauge Bridge keeps itself from workspace membership. `@RequireQuota('users')` on your invite handler checks the seat limit and writes nothing.
+> **Seats** are a plan limit the app names, e.g. `seats`: a gauge counted from membership (`bridge plan quota set pro --metric seats --limit 5 --policy hard --kind gauge --source membership`). Bridge counts the workspace's active members, pending invites included, so the app passes no count. When invites go through your own handler, `@RequireQuota('seats')` on it refuses at the limit and writes nothing. Bridge's own invite API does not refuse at the limit.
 
-> **A plan feature is a `hard` quota nothing counts.** There is no separate entitlement setting: `bridge plan quota set pro --metric analytics --limit 1 --policy hard` makes `analytics` true on `pro`, and a plan without it answers false. Gate it with `@RequireEntitlement('analytics')`. `app_active` is always present: true while the subscription is active, trialing, past due or cancelling at period end.
+> **A plan feature** is listed on the plans that sell it (`bridge plan feature add pro analytics`), which makes `bridge:billing.entitlement.analytics` true on `pro` and false elsewhere. Gate it with a flag `analytics` ruled `bridge:billing.entitlement.analytics eq true` and `@RequireFeatureFlag('analytics')`. `app_active` is always present: true while the subscription is active, trialing, past due or cancelling at period end.
 
 ### Without decorators — `BridgeQuotaService`
 
@@ -183,23 +195,16 @@ async importTickets(req: Request, rows: Row[]) {
 | `assertQuota(req, metric, { current? })` | Refuses with the 402 above |
 | `record(req, metric, { current? \| value?, idempotencyKey? })` | One write: gauge set, or counter event. Never throws |
 | `sync(req, metric, current)` | Sets the gauge — the `@SyncQuota` call |
-| `assertEntitlement(req, key)` | Refuses with the 403 above |
 
 At the lowest level, `bridge.fromRequest(req).usage` has `quota(metric)`, `report(metric, n, key)` and `set(metric, count)`.
 
-## Gating whole paths and capabilities
+## Plan features are flags
 
-There are two more layers, declarative and programmatic. Use whichever fits.
+Whole paths and single handlers are gated the same way: by a flag whose rule names the plan feature.
 
-| Layer | Where | Best for |
-|---|---|---|
-| **Declarative** — `plans: [...]` / `entitlement: '…'` on a route rule | `BridgeModule.forRoot` guard config | Whole paths gated by plan tier or by one entitlement |
-| **Decorator** — `@RequireEntitlement(key)` | On a handler or controller | One capability, with a structured 403 |
-| **Programmatic** — `BridgeService.fromRequest(req).entitlements.can(key)` | Inside a handler/service | Fine-grained per-feature / per-action gates |
-
-### Declarative — plan- and entitlement-restricted routes
-
-Add `plans` to a route rule; the tenant's subscription plan must be in the list. Combine with a `privilege`:
+1. List the feature on the plans that sell it: `bridge plan feature add pro reports` (and `enterprise`, …).
+2. Create the flag `reports` with the rule `bridge:billing.entitlement.reports eq true` (see `feature-flags-prompt.md`).
+3. Ask the flag — on a handler or controller with `@RequireFeatureFlag('reports')`, or on a whole path with a route rule:
 
 ```ts
 BridgeModule.forRoot({
@@ -208,51 +213,22 @@ BridgeModule.forRoot({
     global: true,
     defaultAccess: 'protected',
     rules: [
-      { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
-      { path: '/exports/*', privilege: 'TENANT_WRITE', plans: ['enterprise'] },
+      { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
+      { path: '/exports/*', privilege: 'AUTHENTICATED', featureFlag: 'data_export' },
     ],
   },
 }),
 ```
 
-A caller whose tenant is on `free` hits `/reports/...` and is rejected before the handler runs, with **402 Payment Required** and `reason: 'plan_required'`.
+A caller whose plan does not include the feature is refused before the handler runs with **402 `FEATURE_NOT_IN_PLAN`**, naming the flag and the `fix` route, so the frontend can upsell. A flag that cannot be evaluated denies (fail-closed). A rule's `privilege` is only `'ANONYMOUS'` or `'AUTHENTICATED'`; the older plan-list and entitlement fields on route rules were removed, and a config that still passes one fails at startup naming the flag to use.
 
-The same rule takes `entitlement`, a key or an array of keys the tenant must hold **all** of — denied with 402 `reason: 'entitlement_missing'`:
+Moving a feature to another plan is then `bridge plan feature add` / `rm`, with no release.
 
-```ts
-{ path: '/exports/*', privilege: 'TENANT_WRITE', entitlement: 'data_export' },
-```
-
-Both are **fail-closed**: if the subscription snapshot cannot be resolved, the request is denied. And both read the canonical Billing 2.0 subscription — see the warning in **Decide first** before reaching for `plans`.
-
-### Programmatic — `BridgeService`
+### `BridgeService` — the tenant behind the request
 
 `BridgeService` is the server-side counterpart of the frontend `bridge` object. Inject it, then call `bridge.fromRequest(req)` on a route behind `BridgeAuthGuard` to get a request-scoped `TenantScope` for the tenant of the user the guard verified. The scope fetches `GET {apiBaseUrl}/session/init` **once** (forwarding the verified JWT as `Authorization: Bearer` plus the `x-app-id` header) and caches the result via auth-core's `BridgePullCache` (default 30s TTL), so all slices share a single round-trip.
 
 **Never read the raw `Authorization` header yourself.** Behind the guard, use `fromRequest(req)`. `bridge.fromJwt(token)` exists for a token you hold some other way; it verifies the token exactly as the guard does before any claim is used, and a token that fails rejects every read with `TokenVerificationError` (TBP-673).
-
-```ts
-import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
-import type { Request } from 'express';
-import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
-
-@Controller('exports')
-@UseGuards(BridgeAuthGuard)
-export class ExportsController {
-  constructor(private readonly bridge: BridgeService) {}
-
-  @Get()
-  async export(@Req() req: Request) {
-    const tenant = this.bridge.fromRequest(req);
-
-    if (!(await tenant.entitlements.can('data_export'))) {
-      throw new ForbiddenException('Your plan does not include data export.');
-    }
-
-    return this.exportService.run();
-  }
-}
-```
 
 > `bridge.fromRequest(req)` is the supported path. `bridge.tenant(tenantId)` (arbitrary tenant for cron/admin) is **not yet wired** and throws a clear error pointing you back to `fromRequest` — don't use it.
 
@@ -321,9 +297,9 @@ type — the client SDK already returns it typed. A `GET /quota` proxy plus a
 hand-written mirror of that interface is a common wrong turn, and it silently
 drifts from the real shape the first time a field is added.
 
-Enforcement, though, genuinely is yours alone: a client-side check is display,
-not a cap. Anyone can call your API directly. Disable the button for UX **and**
-refuse the write on the server.
+An action that calls your API is counted and capped on your API: anyone can
+call it directly, so `@RequireQuota` refuses the write there, and the frontend
+reads the same quota from Bridge to show it.
 
 #### `hard` and `metered` behave oppositely
 
@@ -356,41 +332,9 @@ export class BillingController {
 }
 ```
 
-## Reading entitlements
-
-Entitlements are the granular "what can this tenant do" map, derived from the plan. `tenant.entitlements` gives you three accessors:
-
-```ts
-const ent = this.bridge.fromRequest(req).entitlements;
-
-// Common path — loads the snapshot if needed, then answers:
-const canExport = await ent.can('data_export');         // Promise<boolean>
-
-// Full map (also loads the snapshot on first call):
-const all = await ent.snapshot();                        // Record<string, boolean>
-
-// Synchronous check against an already-loaded map (no fetch):
-const map = await ent.snapshot();
-const canSeats = ent.canSync('extra_seats', map);        // boolean
-```
-
-`can(key)` and `snapshot()` are **fail-closed**: an unknown key returns `false`. On a handler, `@RequireEntitlement('ai_completions')` is the one-liner. Gate the feature, not just the route, when the same capability is reachable through multiple endpoints — `BridgeQuotaService.assertEntitlement` refuses with the same structured 403:
-
-```ts
-@Injectable()
-export class AiService {
-  constructor(private readonly quota: BridgeQuotaService) {}
-
-  async complete(req: Request, prompt: string) {
-    await this.quota.assertEntitlement(req, 'ai_completions'); // 403 ENTITLEMENT_REQUIRED
-    return this.runModel(prompt);
-  }
-}
-```
-
 ## Invalidating after a change
 
-The snapshot is cached for the TTL. After an action that you know changes plan or entitlement state in the same request (rare on the backend — usually the Stripe webhook in bridge-api drives this), force a refresh on next access:
+The snapshot is cached for the TTL. After an action that you know changes plan state in the same request (rare on the backend — usually the Stripe webhook in bridge-api drives this), force a refresh on next access:
 
 ```ts
 const tenant = this.bridge.fromRequest(req);
@@ -400,11 +344,9 @@ const fresh = await tenant.subscription;
 
 Normally you don't call this — the 30s TTL keeps state fresh. Backend code should react to billing changes via Bridge **webhooks** (event-driven), not by polling.
 
-## Declarative vs programmatic — which to use
+## Exceptions — a direct plan-feature check
 
-- Reach for **`plans` on a route rule** when an entire path is tier-gated and you can name the allowed plans up front.
-- Reach for **`@RequireQuota` / `@SyncQuota`** for every plan limit on a handler that creates or deletes the thing.
-- Reach for **`@RequireEntitlement(key)`** (or `entitlements.can(key)` in code) when the gate is a named capability (not a plan slug), when the same capability is hit from several routes or a queue/cron worker, or when you want a precise 403 message. Entitlement keys are stable across plan renames; plan slugs are not.
+Only when the developer explicitly asks for no flag. `@RequireEntitlement('<feature>')` on a handler or controller refuses with 403 `ENTITLEMENT_REQUIRED` unless the plan includes the feature; in a service or worker, `BridgeQuotaService.assertEntitlement(req, '<feature>')` does the same, and `bridge.fromRequest(req).entitlements.can('<feature>')` answers a boolean (fail-closed: an unknown key is `false`). `@RequireEntitlement` logs a one-time note in development naming the flag to use instead. Never pair it with `@RequireQuota` on the same metric.
 
 ## Checklist
 
@@ -413,9 +355,9 @@ Normally you don't call this — the 30s TTL keeps state fresh. Backend code sho
 - [ ] No checkout / paywall / Stripe client code added to the backend — purchasing stays in the frontend + bridge-api
 - [ ] Every handler that creates a limited thing carries `@RequireQuota(metric)` — with `current` for a gauge
 - [ ] Every handler that deletes a gauge-counted thing carries `@SyncQuota(metric, { current })`
-- [ ] No `@RequireEntitlement(m)` + `@RequireQuota(m)` pair on the same metric
-- [ ] Tier-gated paths use `plans: [...]` on the route rule (with a `privilege`)
-- [ ] Capability gates use `@RequireEntitlement(key)` or `entitlements.can(key)` via `fromRequest(req)` and fail closed
+- [ ] Every plan-feature gate is a flag ruled `bridge:billing.entitlement.<feature> eq true` — `@RequireFeatureFlag` on the handler or `featureFlag` on a route rule; no plan name compared anywhere
+- [ ] No flag ruled on a metric that also carries `@RequireQuota`
+- [ ] `npx @nebulr-group/bridge-cli check gates` reports nothing
 - [ ] No handler reads the raw `Authorization` header — `fromRequest(req)` behind the guard
 - [ ] `bridge.tenant(tenantId)` is NOT used (not yet wired)
 - [ ] Subscription reads use the `subscription` slice (`plan.slug`, `status`, `endsAt`, `gateEngaged`)
@@ -425,7 +367,6 @@ Normally you don't call this — the 30s TTL keeps state fresh. Backend code sho
 1. **Build:** the project builds with no TypeScript or import errors.
 2. **Limit (gauge):** with a `tickets` hard limit of N, the (N+1)th `POST` — sent with curl, not through the UI — answers 402 `QUOTA_EXCEEDED` with `used`/`limit`/`fix`; after a `DELETE`, `GET /v1/usage/quota/tickets` on Bridge shows `used` one lower and a create succeeds again.
 3. **Limit (counter):** two requests with the same `Idempotency-Key` raise Bridge's `used` by one; a request that fails (4xx/5xx) raises it by none.
-4. **Plan gate (declarative):** a tenant on `free` calling a `plans: ['pro']` route gets rejected; a `pro` tenant gets 200.
-5. **Entitlement gate:** a tenant without the `data_export` entitlement gets 403 from the export endpoint; one with it gets 200.
-6. **Subscription read:** `GET /billing/status` returns the tenant's current `plan`, `status`, and `endsAt` matching the dashboard.
-7. **Fail-closed:** an unknown entitlement key resolves to `false` (the feature is denied), not an error.
+4. **Plan-feature gate:** a tenant whose plan does not list `reports` gets 402 `FEATURE_NOT_IN_PLAN` from a `featureFlag: 'reports'` route; after `bridge plan feature add <its plan> reports` it gets 200, with no release.
+5. **Subscription read:** `GET /billing/status` returns the tenant's current `plan`, `status`, and `endsAt` matching the dashboard.
+6. **Fail-closed:** a flag that does not exist is off, so its route is refused, not opened.

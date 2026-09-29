@@ -114,11 +114,10 @@ interface RouteRule {
   path?: string;
   /** GraphQL operation name, case-sensitive camelCase, e.g. 'listUsers' */
   graphqlOperation?: string;
-  /** Required privilege level for this route */
+  /** Whether the route needs a signed-in caller: 'ANONYMOUS' or 'AUTHENTICATED' */
   privilege: RoutePrivilege;
-  /** Present on the type for a future plan-restriction feature.
-   *  Not currently enforced by BridgeAuthGuard. */
-  plans?: string[];
+  /** The flag that decides who gets this route; its rule says why */
+  featureFlag?: string | { any: string[] } | { all: string[] };
 }
 ```
 
@@ -134,31 +133,26 @@ BridgeModule.forRoot({
       { path: '/health', privilege: 'ANONYMOUS' },
       { path: '/webhooks/*', privilege: 'ANONYMOUS' },
       { path: '/api/status', privilege: 'AUTHENTICATED' },
-      { path: '/users/*', privilege: 'USER_READ' },
-      { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
-      { graphqlOperation: 'listUsers', privilege: 'USER_READ' },
-      { graphqlOperation: 'deleteUser', privilege: 'USER_WRITE' },
+      { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' },
+      { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
     ],
   },
 })
 ```
 
-**Roles and feature flags are decorator-only** (`@RequireRole()`, `@RequireFeatureFlag()`/`@RequireFlag()`); they don't have a place in `RouteRule`. Route rules cover the `privilege` axis (public/anonymous access and privilege-gating); see [How roles & privileges work](/auth/roles/how-it-works/) for why that split exists and which credential type each check applies to.
+**Who gets a route is a flag.** `privilege` only says whether the route needs a signed-in caller; `featureFlag` (or `@RequireFeatureFlag()` on the handler) decides who gets it, and the flag's rule says why, e.g. `privileges contains "USER_WRITE"` for `manage-users`. See [Gate with feature flags](/auth/roles/gate-with-flags/).
 
 ## `RoutePrivilege`: what a rule's `privilege` can be
 
 ```typescript
 type RoutePrivilege =
   | 'ANONYMOUS'       // no authentication required; same effect as @Public()
-  | 'AUTHENTICATED'   // any valid credential, user JWT or API token
-  | 'USER_READ'
-  | 'USER_WRITE'
-  | 'TENANT_READ'
-  | 'TENANT_WRITE'
-  | string;           // any custom privilege key you've defined
+  | 'AUTHENTICATED';  // any valid credential, user JWT or API token
 ```
 
-The four named privileges beyond `ANONYMOUS`/`AUTHENTICATED` are just conventions, not a closed set; anything you've created as a privilege key (see [Define roles & privileges](/auth/roles/define-roles/)) works here too. A rule's `privilege` (anything past `ANONYMOUS`/`AUTHENTICATED`) is enforced against the **user JWT's** `privileges` claim only. It has no effect on an API-token-only request, the same split that applies to `@RequireRole()`.
+Nothing else. A rule that still carries a privilege key such as `USER_READ`, or the removed `plans` / `entitlement` / `role` options, stops the app at startup with an error naming the flag setup to use instead: `featureFlag` with the flag ruled on that privilege (or on `bridge:billing.entitlement.<key>` for a plan feature). An API token's scope is `@RequirePrivilege()` on the handler, API tokens only (see [API tokens](/auth/api-tokens/)).
 
 ## Environment variables
 

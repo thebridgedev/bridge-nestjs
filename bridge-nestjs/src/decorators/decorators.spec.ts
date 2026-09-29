@@ -2,7 +2,6 @@ import 'reflect-metadata';
 import { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY, Public } from './public.decorator';
-import { REQUIRED_ROLE_KEY, RequireRole } from './require-role.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY, RequireFeatureFlag } from './require-feature-flag.decorator';
 import { REQUIRED_PRIVILEGE_KEY, RequirePrivilege } from './require-privilege.decorator';
 import { CurrentUser } from './current-user.decorator';
@@ -22,17 +21,6 @@ describe('Decorators', () => {
       }
       const meta = getHandlerMetadata(IS_PUBLIC_KEY, TestClass.prototype.handler);
       expect(meta).toBe(true);
-    });
-  });
-
-  describe('@RequireRole()', () => {
-    it('should set REQUIRED_ROLE_KEY metadata to the provided role', () => {
-      class TestClass {
-        @RequireRole('ADMIN')
-        handler() {}
-      }
-      const meta = getHandlerMetadata(REQUIRED_ROLE_KEY, TestClass.prototype.handler);
-      expect(meta).toBe('ADMIN');
     });
   });
 
