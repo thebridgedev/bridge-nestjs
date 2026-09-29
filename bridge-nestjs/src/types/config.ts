@@ -37,6 +37,14 @@ export interface RouteRule {
    * Fail-closed on resolution error.
    */
   featureFlag?: FeatureFlagRequirement;
+  /**
+   * A privilege the caller's own user token must carry, from the roles of the
+   * app that issued it. Only for a server that accepts tokens from any app
+   * (`acceptTokensFromAnyApp`) — Bridge's own API, which enforces each app's
+   * permissions on that app's data. Requires `privilege: 'AUTHENTICATED'`.
+   * Refuses with 403 when missing. An app's own code gates with `featureFlag`.
+   */
+  tokenPrivilege?: string;
 }
 
 /**
@@ -60,6 +68,16 @@ export interface BridgeConfig {
    * @required
    */
   appId: string;
+
+  /**
+   * Accept user tokens issued for any app, not only `appId`: the JWT audience
+   * check is skipped (signature, issuer and expiry are still verified), and an
+   * API token is checked against the app it names. For Bridge's own API, which
+   * serves every app; `appId` then names the app Bridge itself runs on.
+   * Never set this in an app — it would accept other apps' users.
+   * @default false
+   */
+  acceptTokensFromAnyApp?: boolean;
 
   /**
    * Base URL for the Bridge API. All endpoints are derived from this.

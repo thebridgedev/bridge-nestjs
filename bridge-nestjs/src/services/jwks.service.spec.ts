@@ -165,6 +165,29 @@ describe('JwksService (NestJS wrapper around auth-core)', () => {
       );
     });
 
+    it('accepts every app\'s users when acceptTokensFromAnyApp is set: no audience', async () => {
+      coreVerifyToken.mockResolvedValue(mockUserClaims);
+      const { service } = makeService({ acceptTokensFromAnyApp: true });
+
+      await service.verifyToken('token');
+
+      expect(coreConfig().audience).toBeUndefined();
+      expect(coreConfig().issuer).toBe('https://api.example.com/auth');
+    });
+
+    it('checks an API token against the app it names when acceptTokensFromAnyApp is set', async () => {
+      coreVerifyApiToken.mockResolvedValue(mockApiTokenClaims);
+      const payload = Buffer.from(JSON.stringify({ appId: 'customer-app', type: 'api' })).toString('base64url');
+      const { service } = makeService({ acceptTokensFromAnyApp: true });
+
+      await service.verifyApiToken(`h.${payload}.s`, 'test-app');
+      expect(coreVerifyApiToken).toHaveBeenCalledWith(`h.${payload}.s`, 'customer-app');
+
+      const { service: single } = makeService();
+      await single.verifyApiToken(`h.${payload}.s`, 'test-app');
+      expect(coreVerifyApiToken).toHaveBeenLastCalledWith(`h.${payload}.s`, 'test-app');
+    });
+
     it('should forward the BridgeConfigService logger', async () => {
       coreVerifyToken.mockResolvedValue(mockUserClaims);
       const { service } = makeService({ debug: true });

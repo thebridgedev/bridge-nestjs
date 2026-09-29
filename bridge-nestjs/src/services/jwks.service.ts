@@ -43,7 +43,10 @@ export class JwksService {
         jwksUrl: this.configService.jwksUrl,
         introspectionUrl: this.configService.introspectionUrl,
         issuer: this.configService.authBaseUrl,
-        audience: this.configService.appId,
+        // Bridge's own multi-app API accepts every app's users: no audience.
+        audience: (this.configService.acceptTokensFromAnyApp
+          ? undefined
+          : this.configService.appId) as string,
         introspectionCacheTtlMs: this.configService.introspectionCacheTtlMs,
         log: (message: string, ...args: unknown[]) => this.configService.log(message, ...args),
       });
@@ -70,7 +73,23 @@ export class JwksService {
    * @throws TokenVerificationError with code `APP_MISMATCH` on wrong-app tokens
    */
   async verifyApiToken(token: string, expectedAppId: string): Promise<ApiTokenClaims> {
-    return this.service.verifyApiToken(token, expectedAppId);
+    // Any-app mode: the token is checked against the app it names; the
+    // introspection answer, not this unverified read, decides it is valid.
+    const appId = this.configService.acceptTokensFromAnyApp
+      ? (claimedAppId(token) ?? expectedAppId)
+      : expectedAppId;
+    return this.service.verifyApiToken(token, appId);
+  }
+}
+
+/** The `aid` an API token claims, read without verifying it. */
+function claimedAppId(token: string): string | undefined {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+    const aid = payload?.aid ?? payload?.appId;
+    return typeof aid === 'string' && aid.length > 0 ? aid : undefined;
+  } catch {
+    return undefined;
   }
 }
 
