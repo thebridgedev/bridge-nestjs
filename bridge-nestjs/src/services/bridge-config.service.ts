@@ -127,7 +127,36 @@ export class BridgeConfigService {
         }
       }
     }
+    if (!operationName) this.warnIfPrefixMissed(path);
     return null;
+  }
+
+  private readonly prefixWarned = new Set<string>();
+
+  /**
+   * TBP-540 — rules match the full request path, including a global prefix
+   * (`app.setGlobalPrefix('api')` makes `/health` arrive as `/api/health`).
+   * A rule written without the prefix silently never matches, so a public
+   * endpoint answers 401. When a rule WOULD match with the first path segment
+   * removed, say so once per rule. Behaviour is unchanged.
+   */
+  private warnIfPrefixMissed(path: string): void {
+    const normalized = path.startsWith('/') ? path : `/${path}`;
+    const segments = normalized.split('/');
+    if (segments.length < 3) return;
+    const prefix = `/${segments[1]}`;
+    const withoutPrefix = `/${segments.slice(2).join('/')}`;
+    for (const rule of this.rules) {
+      if (!rule.path || this.prefixWarned.has(rule.path)) continue;
+      if (this.pathMatches(withoutPrefix, rule.path)) {
+        this.prefixWarned.add(rule.path);
+        console.warn(
+          `[bridge-nestjs] route rule '${rule.path}' did not match '${normalized}'. Rules match the full path, ` +
+            `including a global prefix: write '${prefix}${rule.path.startsWith('/') ? '' : '/'}${rule.path}', ` +
+            `or put @Public() / @RequireFeatureFlag() on the handler, which follows the route wherever it is mounted.`,
+        );
+      }
+    }
   }
 
   /**
