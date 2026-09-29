@@ -329,8 +329,27 @@ export class BridgeAuthGuard implements CanActivate {
       }
     }
 
-    // 9. User-JWT-only checks: the handler's flag, then the route rule's flag.
+    // 9. User-JWT-only checks: the rule's token privilege (any-app servers
+    //    only), the handler's flag, then the route rule's flag.
     if (user) {
+      if (matchingRule?.tokenPrivilege) {
+        const userPrivileges = user.privileges ?? [];
+        if (!userPrivileges.includes(matchingRule.tokenPrivilege)) {
+          this.configService.log('Route token privilege check failed', {
+            required: matchingRule.tokenPrivilege,
+            actual: userPrivileges,
+          });
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'Forbidden',
+            message: `Privilege '${matchingRule.tokenPrivilege}' required`,
+          });
+        }
+        this.configService.log('Route token privilege check passed', {
+          privilege: matchingRule.tokenPrivilege,
+        });
+      }
+
       // Feature flag requirement (decorator only) — user JWT only
       const requiredFlag = this.getRequiredFeatureFlag(context);
       if (requiredFlag && token) {

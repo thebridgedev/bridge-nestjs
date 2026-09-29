@@ -17,10 +17,11 @@ export class BridgeConfigService {
     introspectionCacheTtlMs: number | undefined;
     userJwksUrl: string | undefined;
     manageRoute: string;
+    acceptTokensFromAnyApp: boolean;
   };
 
   constructor(@Inject(BRIDGE_CONFIG) config: BridgeConfig) {
-    assertRouteRules(config.guard?.rules);
+    assertRouteRules(config.guard?.rules, { acceptTokensFromAnyApp: config.acceptTokensFromAnyApp === true });
     this.config = {
       appId: config.appId,
       apiBaseUrl: config.apiBaseUrl || BRIDGE_DEFAULTS.apiBaseUrl,
@@ -30,7 +31,13 @@ export class BridgeConfigService {
       introspectionCacheTtlMs: config.introspectionCacheTtlMs,
       userJwksUrl: config.userJwksUrl,
       manageRoute: config.billing?.manageRoute || BRIDGE_DEFAULTS.manageRoute,
+      acceptTokensFromAnyApp: config.acceptTokensFromAnyApp === true,
     };
+  }
+
+  /** Tokens from any app are accepted (Bridge's own multi-app API). */
+  get acceptTokensFromAnyApp(): boolean {
+    return this.config.acceptTokensFromAnyApp;
   }
 
   get appId(): string {
@@ -193,7 +200,10 @@ export class BridgeConfigService {
  * plan or an entitlement fails at startup, naming the flag setup to use
  * instead, rather than being silently ignored (which would open the route).
  */
-export function assertRouteRules(rules: unknown): void {
+export function assertRouteRules(
+  rules: unknown,
+  options: { acceptTokensFromAnyApp?: boolean } = {},
+): void {
   if (!Array.isArray(rules)) return;
   const problems: string[] = [];
   rules.forEach((raw, i) => {
@@ -209,6 +219,20 @@ export function assertRouteRules(rules: unknown): void {
             typeof privilege === 'string' ? privilege : 'USER_WRITE',
           )}) on the handler (API tokens only).`,
       );
+    }
+    if ('tokenPrivilege' in rule) {
+      if (!options.acceptTokensFromAnyApp) {
+        problems.push(
+          `${where} uses \`tokenPrivilege\`, which is only for a server that accepts tokens from any app (Bridge's own API). ` +
+            `Use featureFlag: '<flag-key>' and give that flag the rule \`privileges contains ${JSON.stringify(
+              typeof rule.tokenPrivilege === 'string' ? rule.tokenPrivilege : 'USER_WRITE',
+            )}\`.`,
+        );
+      } else if (typeof rule.tokenPrivilege !== 'string' || rule.tokenPrivilege.length === 0) {
+        problems.push(`${where} has tokenPrivilege: ${JSON.stringify(rule.tokenPrivilege)}; it must name a privilege.`);
+      } else if (privilege !== 'AUTHENTICATED') {
+        problems.push(`${where} has tokenPrivilege with privilege: ${JSON.stringify(privilege)}; a privilege needs a signed-in caller, so use privilege: 'AUTHENTICATED'.`);
+      }
     }
     if ('plans' in rule) {
       problems.push(
