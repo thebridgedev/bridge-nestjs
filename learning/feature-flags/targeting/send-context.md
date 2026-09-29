@@ -89,9 +89,9 @@ You can also replace it at runtime with `flags.setContext(ctx, merge?)`.
 
 ## Verified attributes are different
 
-Do not send `role`/`plan`-style attributes as per-call attributes on a
-backend. The SDK already fills `user.role`, `privileges`, `tenant.plan` and
-the workspace's `bridge:billing.*` from the verified token and from Bridge, and
+Do not send privilege- or plan-style attributes as per-call attributes on a
+backend. The SDK already fills `privileges` and the workspace's
+`bridge:billing.*` from the verified token and from Bridge, and
 a per-call key would override the verified value. Pass
 `req.bridgeFlagsContext` to `flag()` to use them. See
-[Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/).
+[Target by plan feature or privilege](/feature-flags/targeting/by-plan-or-role/).

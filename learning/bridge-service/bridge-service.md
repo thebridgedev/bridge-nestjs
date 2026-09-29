@@ -17,27 +17,26 @@ Two things to know:
 `forRootAsync()`, so there is no extra wiring. Just inject it.
 
 ```typescript
-import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
 
-@Controller('reports')
+@Controller('account')
 @UseGuards(BridgeAuthGuard)
-export class ReportsController {
+export class AccountController {
   constructor(private readonly bridge: BridgeService) {}
 
-  @Get('export')
-  async export(@Req() req: Request) {
+  @Get('billing-summary')
+  async summary(@Req() req: Request) {
     const tenant = this.bridge.fromRequest(req);
-
-    if (!(await tenant.entitlements.can('pdf-export'))) {
-      throw new ForbiddenException('Your plan does not include PDF export');
-    }
-
-    return this.buildExport();
+    const sub = await tenant.subscription;
+    return { plan: sub.plan.name, status: sub.status };
   }
 }
 ```
+
+Reading is for showing and computing. Deciding who may use a feature is a flag
+(`@RequireFeatureFlag`), see [Gating features by subscription](#gating-features-by-subscription).
 
 ## `bridge.fromRequest(req)`
 
@@ -92,29 +91,13 @@ interface SubscriptionSnapshot {
 }
 
 const sub = await tenant.subscription;
-if (sub.plan.slug === 'free') { /* ... */ }
+const label = `${sub.plan.name} (${sub.status})`; // e.g. for an invoice header
 ```
 
 ### `tenant.entitlements`
 
-The common path is `.can(key)`:
-
-```typescript
-if (await tenant.entitlements.can('seats:10')) { /* ... */ }
-```
-
-| Method | Behavior |
-|---|---|
-| `can(key): Promise<boolean>` | Loads the data if needed, then answers. The usual call. |
-| `snapshot(): Promise<Record<string, boolean>>` | The full entitlements map; fetches on first call. |
-| `canSync(key, cached): boolean` | Synchronous check against an already-loaded map: pass the result of a prior `snapshot()`. Use when checking many keys in a hot path. |
-
-```typescript
-// Many checks without re-awaiting each time:
-const ents = await tenant.entitlements.snapshot();
-const canExport = tenant.entitlements.canSync('pdf-export', ents);
-const canBulk   = tenant.entitlements.canSync('bulk-import', ents);
-```
+The plan's features, read directly. This is a direct plan-feature check; see
+[Exceptions](#exceptions--reading-plan-features-directly) for when to use it.
 
 ### `tenant.usage` (TBP-275, metered usage)
 
@@ -177,14 +160,27 @@ const fresh = await tenant.subscription; // re-fetched
 
 ## Gating features by subscription
 
-Reading the subscription and checking entitlements is how you enforce paid features server-side; there
-is no checkout or paywall in a backend plugin. Purchase and upgrade flows live in your frontend and in
-the Bridge API (webhooks drive the subscription lifecycle). Two ways to enforce:
+A feature a plan sells is gated by a flag, like every other gate: list the feature on the plans that
+sell it (`bridge plan feature add pro pdf-export`), rule the flag
+`bridge:billing.entitlement.pdf-export eq true`, and put `@RequireFeatureFlag('pdf-export')` on the
+handler. A workspace without it gets `402 FEATURE_NOT_IN_PLAN` with the upgrade route. There is no
+checkout or paywall in a backend plugin; purchase and upgrade flows live in your frontend and in the
+Bridge API (webhooks drive the subscription lifecycle). Plan limits (numbers) are `@RequireQuota`; see
+[Plan limits](../plan-limits/plan-limits.md).
 
-Gate inside a handler with an entitlement check:
+## Exceptions — reading plan features directly
+
+For the rare case where the developer explicitly asks for no flag, `tenant.entitlements` answers the
+plan's features directly:
+
+| Method | Behavior |
+|---|---|
+| `can(key): Promise<boolean>` | Loads the data if needed, then answers. |
+| `snapshot(): Promise<Record<string, boolean>>` | The full entitlements map; fetches on first call. |
+| `canSync(key, cached): boolean` | Synchronous check against a map from a prior `snapshot()`. |
 
 ```typescript
-if (!(await this.bridge.fromRequest(req).entitlements.can('feature-key'))) {
+if (!(await this.bridge.fromRequest(req).entitlements.can('pdf-export'))) {
   throw new ForbiddenException();
 }
 ```
@@ -195,12 +191,12 @@ if (!(await this.bridge.fromRequest(req).entitlements.can('feature-key'))) {
   other REST data you want to dedupe (see the README's "Read modes: channel vs pull" section).
 - A user's cached snapshot is dropped as soon as a newer token for that user arrives. Bridge re-issues
   a user's token when their plan, role or entitlements change, and the frontend SDKs pick it up within a
-  second, so `plans:` / `entitlement:` gates follow an upgrade without waiting out the 30s.
+  second, so flag rules on plan features follow an upgrade without waiting out the 30s.
 - To react to a billing change (a plan upgrade, a cancellation), use Bridge **webhooks** rather than
   polling.
 
 ## See also
 
 - [Configuration](../configuration/configuration.md): route rules and guard setup
-- [Feature flags](../feature-flags/feature-flags.md): flag-based gating (distinct from entitlements)
+- [Feature flags](../feature-flags/feature-flags.md): every gate is a flag
 - [Multi-tenancy](../multi-tenancy/multi-tenancy.md): tenant context fundamentals

@@ -58,7 +58,7 @@ Given that, a token minted for workspace A cannot be used to read or write works
 
 ## Role is per-workspace too
 
-`user.role` reflects that person's role **in this workspace**; it's the same JWT claim that's tenant-scoped. If the same person holds `OWNER` in one workspace and `MEMBER` in another, `@RequireRole()` checks in your endpoints are automatically correct per-request without any extra tenant-awareness on your part, because the role in the token was already resolved for the workspace the token was issued against. See [How roles & privileges work](/auth/roles/how-it-works/).
+`user.role` reflects that person's role **in this workspace**; it's the same JWT claim that's tenant-scoped. If the same person holds `OWNER` in one workspace and `MEMBER` in another, a flag ruled on their privileges (`@RequireFeatureFlag()`) answers correctly per-request without any extra tenant-awareness on your part, because the role and privileges in the token were already resolved for the workspace the token was issued against. See [How roles & privileges work](/auth/roles/how-it-works/).
 
 ## API tokens and workspace scope
 

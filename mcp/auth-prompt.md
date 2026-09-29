@@ -1,8 +1,20 @@
 # Bridge NestJS — Authentication & Access Control
 
-You are wiring **backend authentication and access control** into a NestJS application that uses The Bridge. This is the server-side analog of the frontend "SDK auth" guide: there is no login screen and no token issuance here. The frontend obtains the user's access token; this plugin **verifies** that token on every request, attaches the verified identity to the request, and gates handlers by privilege, role, and auth type.
+You are wiring **backend authentication and access control** into a NestJS application that uses The Bridge. This is the server-side analog of the frontend "SDK auth" guide: there is no login screen and no token issuance here. The frontend obtains the user's access token; this plugin **verifies** that token on every request, attaches the verified identity to the request, and gates handlers by flag, API-token scope and auth type.
 
 All JWT and API-token verification is delegated to `@nebulr-group/bridge-auth-core/backend` (`JwksService`). The plugin does no local `jose` verification — it fetches the JWKS, verifies the signature (PS256), checks issuer/audience, and transforms the claims into `BridgeUser` / `ApiTokenClaims`.
+
+## The one rule for app code
+
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+
+Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
+
+Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+
+In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+
+Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "USER_WRITE"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
 
 ## Decide first — which check do you need?
 
@@ -12,17 +24,16 @@ Every gate below is **declarative**: a guard plus decorators, not logic inside t
 |---|---|---|
 | Is this caller authenticated at all? | `BridgeAuthGuard` — globally via `guard.global: true`, or `@UseGuards(BridgeAuthGuard)` | 401 |
 | Which credential may call this route? | `@AcceptAuth('jwt')` / `@AcceptAuth('api_token')` — default accepts both | 401 |
-| Does an **API token** hold a privilege? | `@RequirePrivilege('…')`, or `privilege:` on a route rule | 403 |
-| Is the user in a given role? | `@RequireRole('…')` — decorator only, there is no `role` rule field | 403 |
-| Does the tenant's plan include a capability? | `@RequireEntitlement('…')` — see `billing-prompt.md` | 403 `ENTITLEMENT_REQUIRED` |
+| Who may use this endpoint (a privilege, a plan feature, a rollout)? | `@RequireFeatureFlag('…')`, or `featureFlag` on a route rule — the flag's rule says why | 402 `FEATURE_NOT_IN_PLAN` / 403 `FEATURE_NOT_PERMITTED` / 403 `FEATURE_OFF` |
+| Does an **API token** hold a scope? | `@RequirePrivilege('…')` — API tokens only | 403 |
 | Is the tenant under its plan limit for the thing this handler creates? | `@RequireQuota('…')` (+ `@SyncQuota` on the delete) — see `billing-prompt.md` | 402 `QUOTA_EXCEEDED` |
 | Should this one handler skip auth? | `@Public()`, or a `privilege: 'ANONYMOUS'` rule | — |
 | I am outside a request — socket hook, queue consumer, middleware | `JwksService.verifyToken` / `.verifyApiToken` directly | `TokenVerificationError` |
 
 Two of these fail open, which is why this table comes before the steps:
 
-- **`@RequirePrivilege` does not gate user JWTs.** It enforces the `privileges` claim on **API tokens** only; a browser user passes it unconditionally, by design (Step 4). If you meant "this user may not do this", you want `@RequireRole` or your own check — this decorator will let every signed-in user straight through.
-- **Every decorator here is inert without the guard.** `@RequireRole`, `@RequirePrivilege` and `@AcceptAuth` only set metadata that `BridgeAuthGuard` reads. On a route the guard never runs on they are decoration, and the route is unprotected while looking protected. (`@RequireEntitlement` and `@RequireQuota` are the exception that fails closed: with no user verified by the guard they answer 401 — which on a `@Public()` route means they refuse everyone.)
+- **`@RequirePrivilege` is API tokens only.** It is the scope a machine caller (x-api-key) must carry; a signed-in user is not checked against it (Step 4). If you meant "this user may not do this", you want `@RequireFeatureFlag('…')` with the flag ruled `privileges contains "<PRIVILEGE>"` — this decorator lets every signed-in user straight through.
+- **Every decorator here is inert without the guard.** `@RequireFeatureFlag`, `@RequirePrivilege` and `@AcceptAuth` only set metadata that `BridgeAuthGuard` reads. On a route the guard never runs on they are decoration, and the route is unprotected while looking protected. (`@RequireQuota` is the one that fails closed: with no user verified by the guard it answers 401 — which on a `@Public()` route means it refuses everyone.)
 
 If the user has not said which credential a route serves, ask. It changes the decorators *and* where the handler reads the tenant from.
 
@@ -110,29 +121,31 @@ export class UsersController {
 
 **Always scope queries to the verified `tenantId`.** A user's token is only ever valid for their current tenant; never accept a tenant ID from the request body and trust it.
 
-## Step 3 — Gate by role
+## Step 3 — Gate who gets an endpoint with a flag
+
+Who may call an endpoint is a flag. Create the flag, give it a rule on the privilege the endpoint needs, and put the flag on the handler:
 
 ```ts
 import { Controller, Get } from '@nestjs/common';
-import { RequireRole } from '@nebulr-group/bridge-nestjs';
+import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 
 @Controller('admin')
-@RequireRole('ADMIN')          // controller default
+@RequireFeatureFlag('admin-area')        // rule: privileges contains "USER_WRITE"
 export class AdminController {
   @Get('dashboard')
   dashboard() {}
 
   @Get('settings')
-  @RequireRole('OWNER')        // route override — most specific decorator wins
+  @RequireFeatureFlag('admin-settings')  // rule: privileges contains "TENANT_WRITE" — most specific decorator wins
   settings() {}
 }
 ```
 
-Roles are decorator-only — there is no `role` field on route rules.
+In the default setup ADMIN and OWNER hold `USER_WRITE` and only OWNER holds `TENANT_WRITE`; read the app's real roles with `list_roles` / `bridge role list` before writing the rule. Changing who gets the endpoint is then a rule change, not a release. The same flag can sit on a route rule instead: `{ path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' }`. See `feature-flags-prompt.md` for creating flags and rules.
 
-## Step 4 — Gate API tokens by privilege
+## Step 4 — Scope API tokens with `@RequirePrivilege` (API tokens only)
 
-`@RequirePrivilege(key)` enforces that the **API token** carries a privilege in its `privileges` claim. User JWTs **bypass** this check for backward compatibility, so an endpoint can require `USER_WRITE` for API-token callers while still serving browser users.
+`@RequirePrivilege(key)` enforces that the **API token** (x-api-key, a machine caller) carries a privilege in its `privileges` claim. It is a token scope, not a gate on a person: a signed-in user is not checked against it, so an endpoint can require `USER_WRITE` from API-token callers while signed-in users are gated by the endpoint's flag.
 
 ```ts
 import { Controller, Get, Post } from '@nestjs/common';
@@ -268,7 +281,9 @@ export class SocketAuthService {
 - [ ] `defaultAccess: 'protected'` so unmatched routes require a token
 - [ ] Public routes declared with `privilege: 'ANONYMOUS'` rules (or `@Public()` per-handler)
 - [ ] Handlers read identity via `@CurrentUser()` / `@CurrentTenant()`, never trust a tenant ID from the body
-- [ ] Role-gated routes use `@RequireRole()` (decorator-only)
+- [ ] Who gets an endpoint is a flag: `@RequireFeatureFlag('…')` (or `featureFlag` on a route rule), ruled on a privilege, a plan feature or a rollout — never a role or plan read in the handler
+- [ ] Route rules use only `privilege: 'ANONYMOUS'` / `'AUTHENTICATED'` (anything else throws at startup)
+- [ ] `npx @nebulr-group/bridge-cli check gates` reports nothing
 - [ ] API-token privilege enforcement via `@RequirePrivilege()` where server-to-server access applies
 - [ ] `@AcceptAuth()` set on routes that must reject one credential type
 - [ ] Manual verification (if any) goes through `JwksService` + `TokenVerificationError`
@@ -278,6 +293,6 @@ export class SocketAuthService {
 1. **Build:** the project builds with no TypeScript or import errors.
 2. **No token → 401:** a protected route without a credential returns 401.
 3. **Valid JWT → 200:** a protected route with a valid `Authorization: Bearer` returns 200 scoped to the JWT's tenant.
-4. **Role gate:** a `@RequireRole('OWNER')` route returns 403 for a non-owner JWT.
+4. **Flag gate:** a `@RequireFeatureFlag('admin-settings')` route returns 403 `FEATURE_NOT_PERMITTED` / `FEATURE_OFF` for a JWT the flag is off for, and 200 once the flag's rule matches that user.
 5. **Privilege gate:** an `@AcceptAuth('api_token')` + `@RequirePrivilege('TENANT_WRITE')` route returns 200 for an API token carrying `TENANT_WRITE`, 401 for a user Bearer token, and 403 for an API token missing the privilege.
 6. **Auth-type restriction:** an `@AcceptAuth('jwt')` route returns 401 when called with `x-api-key`.

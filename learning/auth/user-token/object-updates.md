@@ -23,12 +23,12 @@ Workspace-level data that isn't part of the JWT at all (subscription plan, entit
 
 ```typescript
 const tenant = this.bridge.fromRequest(req);
-const canExport = await tenant.entitlements.can('export');
+const subscription = await tenant.subscription; // e.g. to show the plan name
 ```
 
 This is fresher than the JWT's baked-in claims, but it's still **pull, not push**: it's backed by a small in-process cache (`BridgePullCache`, 30-second TTL) rather than re-fetching on every call. Concurrent requests for the same user share one in-flight fetch, and the whole snapshot (subscription, entitlements, branding, and a `role`/`tenantId` user snapshot) is replaced atomically on each refresh; there's no half-updated state. If you've just performed a mutation you know changed something in this snapshot (e.g. your own endpoint upgraded the workspace's plan), call `tenant.invalidate()` to force the next read to refetch rather than waiting out the TTL.
 
-Don't treat this snapshot as instantaneous either, though: a 30-second-old entitlement is still a plausible read immediately after a change. The module wires the cache TTL at 30 seconds (it isn't a `BridgeConfig` option), so for anything where that window genuinely matters, invalidate explicitly right after the mutation that should be visible immediately.
+Don't treat this snapshot as instantaneous either, though: a 30-second-old plan or entitlement is still a plausible read immediately after a change. The module wires the cache TTL at 30 seconds (it isn't a `BridgeConfig` option), so for anything where that window genuinely matters, invalidate explicitly right after the mutation that should be visible immediately.
 
 ## Practical takeaway
 

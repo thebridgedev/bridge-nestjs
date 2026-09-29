@@ -4,6 +4,16 @@ Bridge NestJS plugin for authentication, access control, feature flags, and tena
 
 Built on [`@nebulr-group/bridge-auth-core`](https://www.npmjs.com/package/@nebulr-group/bridge-auth-core) — all JWT and API-token verification is delegated to auth-core's framework-agnostic `JwksService`. This plugin adds the NestJS dependency-injection layer: a module, a guard, decorators, and the request-scoped `BridgeService`.
 
+## The one rule for app code
+
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+
+Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
+
+Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+
+In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+
 ## Installation
 
 ```bash
@@ -32,8 +42,11 @@ export class AppModule {}
 
 ### Global Guard with Route Rules
 
-Central rules express **privilege** and **plan** requirements. Role gating uses `@RequireRole`, and
-feature-flag gating uses `@RequireFeatureFlag` / `@RequireFlag` on the controller or route.
+A rule's `privilege` says whether the route needs a signed-in caller: `'ANONYMOUS'` or
+`'AUTHENTICATED'`. Who gets the route is a flag — the rule's `featureFlag`, or `@RequireFeatureFlag` /
+`@RequireFlag` on the controller or route — and the flag's rule says why (a privilege, a plan feature, a
+rollout). A rule that still passes a privilege key, `plans` or `entitlement` stops the app at startup with
+an error naming the flag setup to use instead.
 
 ```typescript
 BridgeModule.forRoot({
@@ -43,9 +56,9 @@ BridgeModule.forRoot({
     defaultAccess: 'protected',
     rules: [
       { path: '/health', privilege: 'ANONYMOUS' },
-      { path: '/account/users', privilege: 'USER_READ' },
-      { path: '/reports/*', privilege: 'TENANT_READ', plans: ['pro', 'enterprise'] },
-      { graphqlOperation: 'listUsers', privilege: 'USER_READ' },
+      { path: '/account/users', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
+      { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
+      { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
     ],
   },
 })
@@ -84,26 +97,30 @@ export class ItemsController {
 }
 ```
 
-### Role-Based Access
+### Who gets an endpoint — a flag
+
+An admin area is a flag ruled on a privilege, e.g. `privileges contains "USER_WRITE"` (in the default
+setup ADMIN and OWNER hold it; read the app's real roles and privileges with `list_roles` /
+`bridge role list` before writing the rule). The code asks the flag and never reads the role.
 
 ```typescript
-import { RequireRole } from '@nebulr-group/bridge-nestjs';
+import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)
-@RequireRole('ADMIN')
+@RequireFeatureFlag('admin-area')
 export class AdminController {
   @Get('settings')
-  @RequireRole('OWNER') // Override controller-level role
+  @RequireFeatureFlag('admin-settings') // its own flag, e.g. privileges contains "TENANT_WRITE"
   getSettings() { ... }
 }
 ```
 
-### Privilege-Based Access (API tokens)
+### API-token scopes — `@RequirePrivilege` (API tokens only)
 
-`@RequirePrivilege` gates a route on an API-token privilege. It is enforced by `BridgeAuthGuard` when a
-request authenticates with an API token (`x-api-key`). User JWTs (`Authorization: Bearer`) bypass this
-check for backward compatibility — use `@RequireRole` to gate user JWTs.
+`@RequirePrivilege` is the scope an API token (`x-api-key`) must carry — for machine callers such as
+scripts and integrations. It is not a gate on a person: a signed-in user (`Authorization: Bearer`) is not
+checked against it. Gate people with a flag.
 
 ```typescript
 import { RequirePrivilege } from '@nebulr-group/bridge-nestjs';
@@ -158,20 +175,19 @@ home(@Flag({ key: 'show_new_home', defaultValue: false }) showNew: boolean) {
 }
 ```
 
-A flag rule on a privilege, role, plan or plan feature works here the same as in the browser, with no
-wiring: on a request `BridgeAuthGuard` verified, the guard and `@Flag` fill in `privileges`, `user.role`,
-`tenant.plan` and the other token attributes, plus the workspace's `bridge:billing.plan` and
-`bridge:billing.entitlement.<feature>` (read from Bridge, cached per workspace) when `BridgeModule` is
-loaded. Client-sent values are never used. Prefer a privilege rule over a role rule, and for a feature a
-plan sells, target the plan's feature. See
-[Target by plan, privilege or role](../learning/feature-flags/targeting/by-plan-or-role.md).
+A flag rule on a privilege or a plan feature works here the same as in the browser, with no wiring: on a
+request `BridgeAuthGuard` verified, the guard and `@Flag` fill in `privileges` and the other token
+attributes, plus the workspace's `bridge:billing.entitlement.<feature>` (read from Bridge, cached per
+workspace) when `BridgeModule` is loaded. Client-sent values are never used. Prefer a privilege rule over a
+role rule, and for a feature a plan sells, list it on the plans (`bridge plan feature add <plan> <feature>`)
+and rule the flag `bridge:billing.entitlement.<feature> eq true`. See
+[Target by plan feature or privilege](../learning/feature-flags/targeting/by-plan-or-role.md).
 
 **`@RequireFeatureFlag`** — evaluated on demand over the Bridge API by `FeatureFlagService` (with a
 5-minute in-memory cache). No live updates. Use it for simple route gating or occasional checks when you
-don't want to run a flags client. Bridge resolves `user.role`, `privileges`, `tenant.plan` and the
-workspace's `bridge:billing.plan`, status, trial and `bridge:billing.entitlement.<feature>` for it, so
-role, privilege, plan and plan-feature rules work here too (plan-limit numbers, `bridge:billing.quota.*`,
-need `@RequireFlag`).
+don't want to run a flags client. Bridge resolves `privileges` and the workspace's
+`bridge:billing.entitlement.<feature>` for it, so privilege and plan-feature rules work here too
+(plan-limit numbers, `bridge:billing.quota.*`, need `@RequireFlag`).
 
 Both flag paths say why they refused: `402 FEATURE_NOT_IN_PLAN` when an upgrade alone would turn the
 feature on (with `fix` = where to upgrade), `403 FEATURE_NOT_PERMITTED` for a role or privilege reason,
@@ -231,13 +247,13 @@ guard does (signature, issuer, audience, expiry) before reading anything; a toke
 read with `TokenVerificationError` and never touches another user's cached data. Never build a scope from
 the raw `Authorization` header on an unguarded route by decoding it yourself. A newer token for the same user refreshes it at once: Bridge
 re-issues a user's token when their plan or entitlements change, and the frontend SDKs pick that token up
-within a second, so `plans:` / `entitlement:` gates follow an upgrade on the user's next request. A client
+within a second, so flag rules on plan features follow an upgrade on the user's next request. A client
 that keeps presenting its old token sees the change within the 30s.
 
 ```typescript
-import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { Controller, Get, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
-import { BridgeAuthGuard, BridgeService } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, BridgeService, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 
 @Controller('reports')
 @UseGuards(BridgeAuthGuard)
@@ -245,14 +261,9 @@ export class ReportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('export')
+  @RequireFeatureFlag('pdf-export') // flag rule: bridge:billing.entitlement.pdf-export eq true
   async export(@Req() req: Request) {
     const tenant = this.bridge.fromRequest(req);
-
-    // Gate on a plan entitlement, server-side:
-    if (!(await tenant.entitlements.can('pdf-export'))) {
-      throw new ForbiddenException('Plan does not include PDF export');
-    }
-
     const sub = await tenant.subscription;   // { plan: { slug, name }, status, endsAt?, gateEngaged? }
     return this.buildExport(sub.plan.slug);
   }
@@ -264,9 +275,7 @@ What you can read on the returned scope (each field lazily resolves the cached f
 | Member | Returns |
 |---|---|
 | `subscription` | `Promise<{ plan: { slug, name }, status, endsAt?, gateEngaged? }>` |
-| `entitlements.can(key)` | `Promise<boolean>` |
-| `entitlements.canSync(key, cached)` | `boolean` (after `snapshot()` is loaded) |
-| `entitlements.snapshot()` | `Promise<Record<string, boolean>>` |
+| `entitlements` | the plan's features — a direct read, see [Exceptions](#exceptions--direct-plan-feature-checks) |
 | `branding` | `Promise<{ logo, name, ...colors }>` |
 | `user` | `Promise<{ id, email?, role, tenantId }>` |
 | `usage.report(metric, value?, key?)` | `Promise<void>` — report a counter event (TBP-275) |
@@ -275,12 +284,12 @@ What you can read on the returned scope (each field lazily resolves the cached f
 | `snapshot()` | `Promise<SessionSnapshotData>` (the full payload) |
 | `invalidate()` | `Promise<void>` — force-refresh the cached snapshot on next access |
 
-> **Billing on the backend** means *reading* subscription state and *enforcing* entitlements — there is no
+> **Billing on the backend** means *reading* subscription state and *enforcing* plan limits — there is no
 > checkout or paywall here. Purchase and upgrade flows live in the frontend plugin and bridge-api webhooks.
 > `bridge.tenant(tenantId)` (arbitrary-tenant access for cron/admin paths) is not yet wired and throws a
 > clear error; use `bridge.fromRequest(req)` from a request handler.
 
-## Plan limits — `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement`
+## Plan limits — `@RequireQuota`, `@SyncQuota`
 
 One decorator on the handler that creates the thing refuses the request at the plan limit and records
 usage after a 2xx — a POST increments the limit, with nothing else to wire. Direct API calls hit the same gate.
@@ -302,17 +311,25 @@ export class TicketsController {
   remove() {}
 
   @Post(':id/export')   // counter: things that happened — Bridge counts, keyed by Idempotency-Key
-  @RequireEntitlement('app_active')
   @RequireQuota('exports')
   export() {}
 }
 ```
 
-- Refusal: `402 { code: 'QUOTA_EXCEEDED', metric, used, limit, fix }` / `403 { code: 'ENTITLEMENT_REQUIRED', entitlement, fix }`.
+- Refusal: `402 { code: 'QUOTA_EXCEEDED', metric, used, limit, fix }`.
   `fix` is `billing.manageRoute` (default `/subscription`).
 - `metered` quotas never refuse. Nothing is recorded for a 4xx/5xx or a thrown handler; exactly one write per metric otherwise.
-- Needs a user verified by `BridgeAuthGuard`; no verified user → 401. Quota/entitlement unreadable → 503 (fail closed).
-- The same calls without decorators: `BridgeQuotaService` — `check`, `assertQuota`, `record`, `sync`, `assertEntitlement`.
+- Needs a user verified by `BridgeAuthGuard`; no verified user → 401. Quota unreadable → 503 (fail closed).
+- The same calls without decorators: `BridgeQuotaService` — `check`, `assertQuota`, `record`, `sync`.
+- Who may use the feature at all is a flag (`@RequireFeatureFlag`); the quota is only the number.
+
+## Exceptions — direct plan-feature checks
+
+For the rare case where the developer explicitly asks for no flag, the plan can be read directly:
+`@RequireEntitlement('analytics')` on a handler or controller (403
+`{ code: 'ENTITLEMENT_REQUIRED', entitlement, fix }`), `BridgeQuotaService.assertEntitlement(req, key)`,
+or `bridge.fromRequest(req).entitlements.can(key)` / `canSync(key, cached)` / `snapshot()`. Outside
+production, `@RequireEntitlement` logs a one-time note naming the flag rule to use instead.
 
 ## Decorators
 
@@ -321,12 +338,10 @@ export class TicketsController {
 | `@CurrentUser()` | Inject the authenticated `BridgeUser` |
 | `@CurrentTenant()` | Inject the `BridgeTenant` |
 | `@Public()` | Mark a route public (skip auth) |
-| `@RequireRole(role)` | Require a role (checked against the user JWT) |
-| `@RequirePrivilege(privilege)` | Require an API-token privilege (user JWTs bypass) |
+| `@RequirePrivilege(privilege)` | API tokens only: the scope an `x-api-key` caller must carry |
 | `@AcceptAuth(type)` | Restrict accepted auth type: `'jwt' \| 'api_token' \| 'both'` |
 | `@RequireQuota(metric, { current? })` | Plan limit: 402 at the limit, records usage after a 2xx |
 | `@SyncQuota(metric, { current })` | Sets a gauge to your count after a 2xx (deletes, bulk) |
-| `@RequireEntitlement(key)` | 403 unless the tenant's plan includes `key` |
 | `@RequireFeatureFlag(req)` | Flag gating (single / `{ any }` / `{ all }`) over the Bridge API via `FeatureFlagService` |
 | `@RequireFlag(key, default?, opts?)` | Flag gating via `BridgeFlagGuard`, with live updates (from `/flags`) |
 | `@Flag({ key, defaultValue })` | Param decorator — inject a flag value (from `/flags`) |
@@ -364,12 +379,11 @@ interface BridgeConfig {
 interface RouteRule {
   path?: string;             // REST URL wildcard pattern, e.g. "/account/subscription/**"
   graphqlOperation?: string; // GraphQL operation name, camelCase, e.g. "listUsers"
-  privilege: RoutePrivilege; // Required privilege for matching requests
-  plans?: string[];          // Optional: tenant plan must be one of these
+  privilege: RoutePrivilege; // Does the route need a signed-in caller?
+  featureFlag?: FeatureFlagRequirement; // Who gets it — the flag's rule says why
 }
 
-// 'ANONYMOUS' | 'AUTHENTICATED' | 'USER_READ' | 'USER_WRITE' | 'TENANT_READ' | 'TENANT_WRITE' | string
-type RoutePrivilege = string;
+type RoutePrivilege = 'ANONYMOUS' | 'AUTHENTICATED';
 ```
 
 ## Types
@@ -468,12 +482,6 @@ Recommended client handling:
 
 ```json
 { "statusCode": 401, "error": "Unauthorized", "message": "No authorization token was provided" }
-```
-
-### 403 Forbidden (Role)
-
-```json
-{ "statusCode": 403, "error": "Forbidden", "message": "Role 'ADMIN' required" }
 ```
 
 ### 403 Forbidden (Feature Flag)

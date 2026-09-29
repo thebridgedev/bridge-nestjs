@@ -1,4 +1,4 @@
-# Target by plan, privilege or role
+# Target by plan feature or privilege
 
 This is one of the biggest advantages of building flags on Bridge instead of
 in isolation: Bridge already knows who's signed in, what they are allowed to
@@ -19,17 +19,14 @@ From the signed-in user's token, verified by `BridgeAuthGuard`:
 | Attribute | Comes from | Example values |
 |---|---|---|
 | `user.id` | the token's `sub` | the signed-in user's id |
-| `user.role` | the token's `role` | `MEMBER`, `ADMIN`, `OWNER` in the default setup |
 | `user.email` | the token's `email` | `jane@acme.com` |
 | `tenant.id` | the token's `tid` | the current workspace's id |
-| `tenant.plan` | the token's `plan` | the workspace's plan when the token was issued |
 | `privileges` | the token's `privileges` | the user's privilege list, e.g. `USER_READ` |
 
 From the workspace's billing, read from Bridge and cached per workspace:
 
 | Attribute | Example values |
 |---|---|
-| `bridge:billing.plan` | the workspace's current plan, e.g. `pro` |
 | `bridge:billing.subscription.status` | e.g. `active`, `trial` |
 | `bridge:billing.trial` | `true` while the workspace is on a trial |
 | `bridge:billing.entitlement.<feature>` | `true` when the plan includes the feature |
@@ -46,17 +43,18 @@ the wrong tool for them anyway.
 
 ## Which attribute to write the rule on
 
-- **A feature a plan sells** → `bridge:billing.entitlement.<feature>`. Include
-  the feature on the plan, then point the flag's rule at it. The plan is where
-  the customer sees what they are buying, so changing what Pro includes stays
-  one edit in one place. See [Lock features to a plan](/billing/limits/lock-features/).
-- **Who someone is** → prefer a privilege rule (`privileges contains
-  "REPORTS_BETA"`) over a role rule (`user.role eq "ADMIN"`). A privilege rule
-  survives renamed or reshuffled roles; roles and what they can do differ per
-  app, so check the app's real roles before writing a role rule.
-- **The plan name itself** → `bridge:billing.plan`. It follows the workspace's
-  subscription within seconds. `tenant.plan` is the plan recorded in the
-  user's token and changes when the token is renewed.
+- **A feature a plan sells** → `bridge:billing.entitlement.<feature>`. List
+  the feature on the plans that sell it (`bridge plan feature add <plan>
+  <feature>`), then rule the flag `bridge:billing.entitlement.<feature> eq
+  true`. The plan is where the customer sees what they are buying, so changing
+  what Pro includes stays one edit in one place, and the rule never names a
+  plan. See [Lock features to a plan](/billing/limits/lock-features/).
+- **What someone may do** → a privilege rule (`privileges contains
+  "REPORTS_BETA"`). `contains` is exact membership. Which roles hold a
+  privilege is only true in the default setup and differs per app, so read the
+  app's real roles and privileges (`list_roles` / `bridge role list`) before
+  writing the rule. A rule on the role itself (`user.role eq "ADMIN"`) only
+  when you mean the role, not what it can do.
 
 ## Example: gate a route on a plan feature
 
@@ -115,17 +113,16 @@ are still filled in; the billing attributes need `BridgeModule`.
 
 Every attribute above comes from the token `BridgeAuthGuard` verified, or
 from Bridge itself. Nothing a client sends is used: not the `x-bridge-context`
-header, not a `role` or `plan` on `req.user`, not a `bridgeFlagsContext`
+header, not a privilege or plan on `req.user`, not a `bridgeFlagsContext`
 property a middleware set. Your own per-call `attributes` still win on a key
 collision, so don't pass client input there either.
 
-## The older `@RequireFeatureFlag` path
+## The `@RequireFeatureFlag` path
 
 The main `@nebulr-group/bridge-nestjs` entry point also ships
 `@RequireFeatureFlag` / `FeatureFlagService`, which asks Bridge's API to
 evaluate each flag from the caller's access token. Bridge resolves the same
-attributes there: `user.role`, `privileges`, `tenant.plan` and the other token
-attributes, plus the workspace's `bridge:billing.plan`, subscription status,
-trial and `bridge:billing.entitlement.<feature>` (not the plan-limit numbers,
-`bridge:billing.quota.*`). For new code, use `@RequireFlag`. See
-[Gate features by role or privilege](/auth/roles/gate-with-flags/).
+attributes there: `privileges` and the other token attributes, plus the
+workspace's subscription status, trial and `bridge:billing.entitlement.<feature>`
+(not the plan-limit numbers, `bridge:billing.quota.*`). Both paths follow the
+same rule. See [Gate features with flags](/auth/roles/gate-with-flags/).

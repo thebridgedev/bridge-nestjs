@@ -7,7 +7,7 @@ sidebar:
 
 # Common role setups
 
-A few patterns that cover most apps, built from privileges you define once (see [Define roles & privileges](/auth/roles/define-roles/)) and enforce from your NestJS backend via `@RequireRole()`, `@RequirePrivilege()`, or route rules.
+A few patterns that cover most apps, built from privileges you define once (see [Define roles & privileges](/auth/roles/define-roles/)) and enforce from your NestJS backend with a flag ruled on a privilege (`@RequireFeatureFlag()` or a route rule's `featureFlag`), plus `@RequirePrivilege()` for API tokens.
 
 ## Regular user, admin, and read-only
 
@@ -17,7 +17,7 @@ A few patterns that cover most apps, built from privileges you define once (see 
 | Admin | `ADMIN` | `AUTHENTICATED`, `USER_READ`, `USER_WRITE`, `TENANT_READ` | Can manage team members; workspace-level settings (billing, plan) stay with `OWNER` |
 | Viewer | `VIEWER` | `AUTHENTICATED`, `USER_READ` | Read-only: can sign in and look around, can't create or edit anything |
 
-`ADMIN` ships with exactly this privilege set by default. `MEMBER` and `VIEWER` are yours to add:
+`ADMIN` ships with exactly this privilege set in the default setup; read the app's real roles with `bridge role list` (or `list_roles`) before writing a rule. `MEMBER` and `VIEWER` are yours to add:
 
 ```bash
 bridge role create --name Member --key MEMBER --privileges AUTHENTICATED,USER_READ,TENANT_READ
@@ -25,45 +25,30 @@ bridge role create --name Member --key MEMBER --privileges AUTHENTICATED,USER_RE
 bridge role create --name Viewer --key VIEWER --privileges AUTHENTICATED,USER_READ
 ```
 
-Enforcing the three from a controller: `@RequireRole()` checks the *role* on a signed-in user's JWT (`user.role`), which is the right tool for gating whole sections of your app by which of these three someone holds:
+Enforcing the three from a controller: gate by what the role *grants*, not by its name. A flag `manage-team` ruled `privileges contains "USER_WRITE"` lets `ADMIN`, `OWNER` and any future role that includes `USER_WRITE` through, without listing role keys:
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireRole, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, RequireFeatureFlag, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
 
 @Controller('team')
 @UseGuards(BridgeAuthGuard)
 export class TeamController {
   @Get()
   list(@CurrentUser() user: BridgeUser) {
-    // MEMBER, ADMIN, and VIEWER can all reach this route:
-    // no @RequireRole means any authenticated role passes.
+    // MEMBER, ADMIN and VIEWER can all reach this route: no flag on it.
     return { requestedBy: user.email };
   }
 
   @Get('manage')
-  @RequireRole('ADMIN')
+  @RequireFeatureFlag('manage-team') // rule: privileges contains "USER_WRITE"
   manage(@CurrentUser() user: BridgeUser) {
     return { message: 'Team management', by: user.email };
   }
 }
 ```
 
-If you'd rather gate by what the role *grants* than by its name, use route-rule `privilege` instead. This reads `user.privileges`, so `MEMBER`, `ADMIN`, and any future role that happens to include `USER_WRITE` all pass without you having to list every role key:
-
-```typescript
-BridgeModule.forRoot({
-  appId: 'YOUR_APP_ID',
-  guard: {
-    global: true,
-    rules: [
-      { path: '/team/manage', privilege: 'USER_WRITE' },
-    ],
-  },
-})
-```
-
-See [How roles & privileges work](/auth/roles/how-it-works/) for exactly when to reach for `@RequireRole()` vs. `privilege`.
+The same flag works as a route rule: `{ path: '/team/manage', privilege: 'AUTHENTICATED', featureFlag: 'manage-team' }`. Write a role rule (`user.role eq "ADMIN"`) only when you mean the role itself. See [How roles & privileges work](/auth/roles/how-it-works/).
 
 ## A bespoke role for one client
 
@@ -80,38 +65,21 @@ Assign it to that client's users:
 bridge user invite --email user@enterprise-client.com --role ENTERPRISE_BETA --tenant-id <theirTenantId>
 ```
 
-The privilege alone doesn't gate anything in your API by itself; you still decide what `BETA_REPORTS` protects. Two ways to wire it up, depending on how the rest of the endpoint is already structured:
+The privilege alone doesn't gate anything in your API by itself; you still decide what `BETA_REPORTS` protects. Make it a flag, `beta-reports`, ruled `privileges contains "BETA_REPORTS"`. Once a second role (or a plan that sells the feature) also needs it, you grant the privilege or widen the rule, and the code does not change:
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireRole, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, RequireFeatureFlag, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
 
 @Controller('reports')
 @UseGuards(BridgeAuthGuard)
 export class ReportsController {
-  // Option 1: gate on the role directly. Simple, but only works while
-  // ENTERPRISE_BETA is the only role that should see this.
   @Get('beta')
-  @RequireRole('ENTERPRISE_BETA')
+  @RequireFeatureFlag('beta-reports') // rule: privileges contains "BETA_REPORTS"
   getBetaReports(@CurrentUser() user: BridgeUser) {
     return { reports: [], forTenant: user.tenantId };
   }
 }
 ```
 
-```typescript
-// Option 2: gate on the privilege via a route rule. Scales better once a
-// second role (or a future plan tier) also needs BETA_REPORTS: grant them
-// the privilege instead of hard-coding a second role name into the check.
-BridgeModule.forRoot({
-  appId: 'YOUR_APP_ID',
-  guard: {
-    global: true,
-    rules: [
-      { path: '/reports/beta', privilege: 'BETA_REPORTS' },
-    ],
-  },
-})
-```
-
-Keep in mind route-rule `privilege` only applies when the caller presents a **user JWT**; see [How roles & privileges work](/auth/roles/how-it-works/) for the user-JWT-vs-API-token split. If this same report endpoint should also be reachable by an API token (a script pulling reports on the client's behalf), pair it with `@RequirePrivilege('BETA_REPORTS')` too, which is checked independently against the API token's own privilege list. If the feature should also be reflected in a feature-flag-driven UI, see [Gate features by role or privilege](/auth/roles/gate-with-flags/).
+A flag is evaluated for a signed-in person (user JWT). If this same report endpoint should also be reachable by an API token (a script pulling reports on the client's behalf), add `@RequirePrivilege('BETA_REPORTS')` too, which is checked against the API token's own scope (API tokens only). The same flag drives the UI; see [Gate features by role or privilege](/auth/roles/gate-with-flags/).

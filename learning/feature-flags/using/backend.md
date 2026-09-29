@@ -70,17 +70,18 @@ user on that plan (TBP-671). If you proxy requests from a frontend to NestJS,
 you don't need to forward it, and nothing on the backend should read it.
 
 Targeting attributes come from verified sources only, with no wiring:
-`user.role`, `privileges`, `user.id`, `user.email`, `tenant.id` and
-`tenant.plan` from the token `BridgeAuthGuard` verified, and the workspace's
-`bridge:billing.plan` and `bridge:billing.entitlement.<feature>` from Bridge
-(with `BridgeModule` loaded). A rule on any of them gives the same answer as
-in the browser. See
-[Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/).
+`privileges`, `user.id`, `user.email` and `tenant.id` from the token
+`BridgeAuthGuard` verified, and the workspace's plan features
+(`bridge:billing.entitlement.<feature>`) from Bridge (with `BridgeModule`
+loaded). A rule on any of them gives the same answer as in the browser. See
+[Target by plan feature or privilege](/feature-flags/targeting/by-plan-or-role/).
 App-specific facts your server knows (a project count, a region) go in
 per-call `attributes`; see
 [Send context from your backend](/feature-flags/targeting/send-context/).
 
-## Route guards are not authorization
+## Flags and your data
 
-Flags decide which code path runs. Protect data with `BridgeAuthGuard`, roles
-and privileges, and your own checks.
+Flags decide who gets an endpoint and which code path runs. Keep each
+workspace's data apart by scoping every query to the workspace in the verified
+token, and keep permission on one specific record ("only the author edits
+their post") in your own code.
