@@ -118,7 +118,7 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
         this.markCounted(response, counted);
         throw error;
       }
-      // A gauge nobody counts here (e.g. `users`, which Bridge keeps from
+      // A gauge nobody counts here (e.g. seats, which Bridge keeps from
       // membership) is checked but never reported as a counter event.
       const recordCounter = !required.current && decision.quota?.kind !== 'gauge';
       const checkedOnly = !required.current && !recordCounter;

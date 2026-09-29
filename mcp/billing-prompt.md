@@ -167,7 +167,7 @@ and for a flag whose rule asks for a plan feature the workspace's plan lacks, 40
 
 > **Every hard quota is also an entitlement** with the same name (dots become `_`), true while `used < limit`. So rule a flag on a feature key, never on the metric you also put `@RequireQuota` on: at the cap the flag would refuse before the quota can answer the 402 your frontend knows how to upsell. A flag for who may, `@RequireQuota` for how many.
 
-> **Seats** (`users`) are a gauge Bridge keeps itself from workspace membership. `@RequireQuota('users')` on your invite handler checks the seat limit and writes nothing.
+> **Seats** are a plan limit the app names, e.g. `seats`: a gauge counted from membership (`bridge plan quota set pro --metric seats --limit 5 --policy hard --kind gauge --source membership`). Bridge counts the workspace's active members, pending invites included, so the app passes no count. When invites go through your own handler, `@RequireQuota('seats')` on it refuses at the limit and writes nothing. Bridge's own invite API does not refuse at the limit.
 
 > **A plan feature** is listed on the plans that sell it (`bridge plan feature add pro analytics`), which makes `bridge:billing.entitlement.analytics` true on `pro` and false elsewhere. Gate it with a flag `analytics` ruled `bridge:billing.entitlement.analytics eq true` and `@RequireFeatureFlag('analytics')`. `app_active` is always present: true while the subscription is active, trialing, past due or cancelling at period end.
 

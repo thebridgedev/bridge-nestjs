@@ -286,9 +286,9 @@ export class BridgeQuotaService {
     return `idem-${digest}`;
   }
 
-  /** Counter mode on a hard quota. A gauge nobody counts falls back to Bridge's stored value. */
+  /** Counter mode on a hard quota. A gauge nobody counts falls back to Bridge's stored value; seats (source membership) are Bridge's own count. */
   private counterUsed(quota: QuotaSnapshot): number {
-    if (quota.kind === 'gauge' && quota.metric !== 'users' && !this.warned.has(quota.metric)) {
+    if (quota.kind === 'gauge' && quota.source !== 'membership' && !this.warned.has(quota.metric)) {
       this.warned.add(quota.metric);
       console.warn(
         `[bridge-nestjs] '${quota.metric}' is a gauge quota but no \`current\` count was given — comparing Bridge's last stored value. Pass \`current\` so the check uses your own count and the gauge stays in step.`,

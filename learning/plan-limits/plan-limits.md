@@ -65,7 +65,7 @@ export class TicketsController {
 
 `current` receives the tenant (`t.id` is the verified workspace id; it is a `QuotaTenant`, so leave it unannotated or type it as `QuotaTenant`, not `BridgeTenant`) and the controller instance, so it can use the controller's services. Your count is what the limit is compared against, so Bridge's copy heals itself if it ever missed an update. There is no decrement and no reservation.
 
-**Seats** (`users`) are a gauge Bridge keeps from workspace membership. `@RequireQuota('users')` on an invite handler checks the seat limit and writes nothing.
+**Seats** are a plan limit the app names, e.g. `seats`, set as a gauge counted from membership (`--kind gauge --source membership`). Bridge counts the workspace's active members, pending invites included. `@RequireQuota('seats')` on the app's own invite handler checks the limit and writes nothing; Bridge's own invite API does not refuse at the limit.
 
 ## What happens on a request
 

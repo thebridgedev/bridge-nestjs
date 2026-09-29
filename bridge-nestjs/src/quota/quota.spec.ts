@@ -67,7 +67,7 @@ class TicketsController {
   export() {}
 
   @Post('invite')
-  @RequireQuota('users')
+  @RequireQuota('seats')
   invite() {}
 }
 
@@ -419,12 +419,14 @@ describe('@RequireQuota — gauge (something that exists)', () => {
     expect(warn).toHaveBeenCalled();
   });
 
-  it('seats (`users`, a gauge Bridge keeps) are checked but never reported as counter events', async () => {
-    quotas.users = snap('users', 2, 5, { kind: 'gauge' });
+  it('seats (a gauge counted from membership) are checked, never reported, and need no count', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    quotas.seats = snap('seats', 2, 5, { kind: 'gauge', source: 'membership' });
     await run(TicketsController, 'invite', verifiedRequest());
     expect(writes()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
 
-    quotas.users = snap('users', 5, 5, { kind: 'gauge' });
+    quotas.seats = snap('seats', 5, 5, { kind: 'gauge', source: 'membership' });
     const err = await refusal(run(TicketsController, 'invite', verifiedRequest()));
     expect(err.getStatus()).toBe(402);
   });
@@ -709,9 +711,9 @@ describe('X-Bridge-Usage-Counted (outside production only) — TBP-697', () => {
     expect(response.headers.get('x-bridge-usage-counted')).toBe('exports');
   });
 
-  it('a gauge Bridge keeps (`users`) is only checked here, so it is not named', async () => {
+  it('a gauge Bridge keeps (seats, counted from membership) is only checked here, so it is not named', async () => {
     process.env.NODE_ENV = 'development';
-    quotas.users = snap('users', 2, 5, { kind: 'gauge' });
+    quotas.seats = snap('seats', 2, 5, { kind: 'gauge', source: 'membership' });
     const response = expressResponse();
     await intercept('invite', response);
     expect(response.headers.has('x-bridge-usage-counted')).toBe(false);
