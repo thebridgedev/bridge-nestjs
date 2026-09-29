@@ -61,7 +61,7 @@ If the user has not said which they want, default to the global guard and mark e
 
 - **appId** — your Bridge application ID. Get it from `bridge app get` or the Bridge dashboard.
 - **Package manager** — use whatever the project already uses (check for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, or `package-lock.json`).
-- An existing NestJS app (`@nestjs/common` and `@nestjs/core` ^10 or ^11).
+- An existing NestJS app (`@nestjs/common` and `@nestjs/core` ^10, ^11 or ^12; a project from today's `nest new` is 12 and works as is).
 
 ## Migration check
 
@@ -97,8 +97,8 @@ Replace `npm i` with the project's package manager (`bun add`, `pnpm add`, `yarn
 `@nebulr-group/bridge-auth-core` is a dependency of the plugin and installs with it; there is no second package to add by hand. All JWT and API-token verification is delegated to auth-core's `JwksService`.
 
 Peer dependencies (already present in any NestJS project):
-- `@nestjs/common` (^10.0.0 || ^11.0.0)
-- `@nestjs/core` (^10.0.0 || ^11.0.0)
+- `@nestjs/common` (^10.0.0 || ^11.0.0 || ^12.0.0)
+- `@nestjs/core` (^10.0.0 || ^11.0.0 || ^12.0.0)
 
 ## Register the Bridge module
 
