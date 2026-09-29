@@ -185,7 +185,7 @@ export class ReportsService {
 ## 7. Tenant data, and a feature a plan sells
 
 The plan feature is gated by a flag: list `pdf-export` on the plans that sell it
-(`bridge plan feature add pro pdf-export`) and rule the flag
+(`bridge plan feature add pro pdf_export`) and rule the flag
 `bridge:billing.entitlement.pdf_export eq true`. A workspace without it gets
 `402 FEATURE_NOT_IN_PLAN` with the upgrade route.
 
