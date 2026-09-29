@@ -55,11 +55,9 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
           { path: '/health', privilege: 'ANONYMOUS' },
           { path: '/webhooks/*', privilege: 'ANONYMOUS' },
 
-          // Require specific privileges
-          { path: '/account/subscription/*', privilege: 'TENANT_WRITE' },
-          { path: '/users/*', privilege: 'USER_READ' },
-
-          // Restrict by subscription plan
+          // Who gets a route is a flag; its rule says why
+          // (e.g. `manage-users` ruled `privileges contains "USER_WRITE"`)
+          { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
         ],
       },
     }),
@@ -70,7 +68,7 @@ export class AppModule {}
 
 All routes are now protected by default, with the exceptions you defined.
 
-> **Note:** Role-based access (`@RequireRole()`) and feature flags (`@RequireFlag()` from `@nebulr-group/bridge-nestjs/flags`) are applied via decorators on controllers/routes, not in route rules. See the [feature flags documentation](../feature-flags/feature-flags.md) for details.
+> **Note:** Every gate is a flag: a route rule's `featureFlag`, or `@RequireFeatureFlag()` / `@RequireFlag()` (from `@nebulr-group/bridge-nestjs/flags`) on a controller or handler. The flag's rule says why — a privilege, a plan feature, a rollout. See the [feature flags documentation](../feature-flags/feature-flags.md).
 
 ## Accessing the authenticated user
 
@@ -132,7 +130,7 @@ export class AppController {
 
 The plugin supports API token authentication alongside user JWTs. API tokens are sent via the `x-api-key` header and carry their own privilege claims.
 
-Use `@RequirePrivilege()` to enforce that an API token has a specific privilege, and `@AcceptAuth()` to restrict which auth types an endpoint accepts:
+Use `@RequirePrivilege()` (API tokens only) for the scope an API token must carry, and `@AcceptAuth()` to restrict which auth types an endpoint accepts:
 
 ```typescript
 import { Controller, Get, Req } from '@nestjs/common';
@@ -142,7 +140,7 @@ import { Request } from 'express';
 @Controller('api/users')
 export class ApiUsersController {
   // Accept both user JWTs and API tokens (default behavior)
-  // API tokens must have USER_READ privilege; user JWTs bypass this check
+  // API tokens only: an x-api-key caller must carry USER_READ. Not a gate on a person.
   @Get()
   @RequirePrivilege('USER_READ')
   listUsers(@Req() req: Request) {
@@ -171,6 +169,6 @@ You now have backend authentication set up. The guard will:
 2. Validate API tokens from `x-api-key` headers
 3. Verify tokens against Bridge's JWKS endpoints
 4. Attach user and tenant information to each request
-5. Enforce privilege, role, and feature flag requirements
+5. Enforce flag requirements (people) and API-token scopes (machines)
 
-For detailed examples including role-based access, feature flags, API token patterns, GraphQL support, and multi-tenancy, see the [examples documentation](../examples/examples.md).
+For detailed examples including flag-gated endpoints, feature flags, API token patterns, GraphQL support, and multi-tenancy, see the [examples documentation](../examples/examples.md).

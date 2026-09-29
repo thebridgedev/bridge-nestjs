@@ -4,18 +4,14 @@ import {
   ExecutionContext,
   UnauthorizedException,
   ForbiddenException,
-  HttpException,
-  HttpStatus,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Request, Response } from 'express';
 import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
-import { BridgeService } from '../bridge/bridge.service';
 import { rememberVerifiedUserToken } from '../bridge/verified-request';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { REQUIRED_ROLE_KEY } from '../decorators/require-role.decorator';
 import { featureRefusal } from '../flags/feature-refusal';
 import type { RequirementVerdict } from '../services/feature-flag.service';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-feature-flag.decorator';
@@ -64,45 +60,8 @@ const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = 
 };
 
 /**
- * Body of a 402 Payment Required denial (TBP-472). Dev-friendly: carries an
- * action `reason` plus the specific plan / entitlement that was required.
- */
-interface PaymentRequiredBody {
-  error: 'Payment required';
-  reason:
-    | 'plan_required'
-    | 'entitlement_missing'
-    | 'billing_locked'
-    /**
-     * TBP-614 — the workspace has NO canonical Billing 2.0 subscription at
-     * all, so no plan slug could be resolved. Distinct from `plan_required`,
-     * which means a plan WAS resolved and is not in the allow-list.
-     *
-     * Collapsing the two is what made this hard to diagnose: a consumer
-     * gating on `plans:` for a customer base predating the Billing 2.0
-     * rollout got 402 `plan_required` for every single user, which reads as
-     * "nobody has bought this" rather than "this app is not on the mechanism
-     * you are gating against".
-     */
-    | 'plan_unresolved';
-  requiredPlan?: string;
-  requiredEntitlement?: string;
-}
-
-/**
- * 402 Payment Required — plan/entitlement gating (TBP-472). NestJS has no
- * built-in exception for this status, so we throw a raw HttpException with a
- * dev-friendly body.
- */
-class PaymentRequiredException extends HttpException {
-  constructor(body: PaymentRequiredBody) {
-    super({ statusCode: HttpStatus.PAYMENT_REQUIRED, ...body }, HttpStatus.PAYMENT_REQUIRED);
-  }
-}
-
-/**
  * Guard that validates JWT bearer tokens / API tokens and enforces
- * role, feature flag, and privilege requirements.
+ * feature-flag requirements (people) and API-token privileges (machines).
  *
  * Supports two authentication paths that are evaluated **independently**:
  *
@@ -111,12 +70,13 @@ class PaymentRequiredException extends HttpException {
  *      the guard trusts it and skips re-verification.
  *    - Otherwise, if x-api-key looks like a JWT, verifies via JWKS and sets
  *      `req.bridgeApiToken`.
- *    - Enforces `@RequirePrivilege` when present; user JWTs bypass this check.
+ *    - Enforces `@RequirePrivilege` when present — an API token's scope. It is
+ *      an API-token check only; people are gated by flags.
  *
  * 2. **User JWT path** (Authorization: Bearer header):
  *    - Verifies via JWKS (user token endpoint), then sets
  *      `req.bridgeUser`, `req.bridgeTenant`, and `req.bridgeAccessToken`.
- *    - Enforces route-rule privilege (from config) and `@RequireRole`/`@RequireFeatureFlag`.
+ *    - Enforces `@RequireFeatureFlag` and the matching route rule's `featureFlag`.
  *
  * **When both headers are present (e.g. cloud-views always sends both), both paths
  * run and both contexts coexist on `request`.** The guard returns true as long as at
@@ -133,7 +93,6 @@ export class BridgeAuthGuard implements CanActivate {
     private readonly configService: BridgeConfigService,
     private readonly jwksService: JwksService,
     private readonly featureFlagService: FeatureFlagService,
-    private readonly bridgeService: BridgeService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -348,10 +307,9 @@ export class BridgeAuthGuard implements CanActivate {
       });
     }
 
-    // 8. API-token privilege check (@RequirePrivilege) — applies when API
-    //    token is present. User JWTs bypass @RequirePrivilege (existing
-    //    backward-compat behavior); they are governed by @RequireRole,
-    //    @RequireFeatureFlag and route-rule privilege below.
+    // 8. API-token privilege check (@RequirePrivilege) — an API token's
+    //    scope, for machine callers. It is not a gate on a person: user JWTs
+    //    are gated by flags below (@RequireFeatureFlag / rule `featureFlag`).
     if (apiTokenClaims) {
       const requiredPrivilege = this.getRequiredPrivilege(context);
       if (requiredPrivilege) {
@@ -371,43 +329,8 @@ export class BridgeAuthGuard implements CanActivate {
       }
     }
 
-    // 9. User-JWT-only checks (route rule privilege, role, feature flag)
+    // 9. User-JWT-only checks: the handler's flag, then the route rule's flag.
     if (user) {
-      // Route-rule privilege for user JWT
-      const rulePrivilege = matchingRule?.privilege;
-      if (rulePrivilege && rulePrivilege !== 'ANONYMOUS' && rulePrivilege !== 'AUTHENTICATED') {
-        const userPrivileges = user.privileges ?? [];
-        if (!userPrivileges.includes(rulePrivilege)) {
-          this.configService.log('Route privilege check failed', {
-            required: rulePrivilege,
-            actual: userPrivileges,
-          });
-          throw new ForbiddenException({
-            statusCode: 403,
-            error: 'Forbidden',
-            message: `Privilege '${rulePrivilege}' required`,
-          });
-        }
-        this.configService.log('Route privilege check passed', { privilege: rulePrivilege });
-      }
-
-      // Role requirement (decorator only) — user JWT only
-      const requiredRole = this.getRequiredRole(context);
-      if (requiredRole) {
-        if (user.role !== requiredRole) {
-          this.configService.log('Role check failed', {
-            required: requiredRole,
-            actual: user.role,
-          });
-          throw new ForbiddenException({
-            statusCode: 403,
-            error: 'Forbidden',
-            message: `Role '${requiredRole}' required`,
-          });
-        }
-        this.configService.log('Role check passed', { role: requiredRole });
-      }
-
       // Feature flag requirement (decorator only) — user JWT only
       const requiredFlag = this.getRequiredFeatureFlag(context);
       if (requiredFlag && token) {
@@ -427,12 +350,10 @@ export class BridgeAuthGuard implements CanActivate {
         this.configService.log('Feature flag check passed', { flag: requiredFlag });
       }
 
-      // Route-rule gating (TBP-472): feature flag (403), then plan and
-      // entitlement (402). Only user JWTs carry the tenant/subscription
-      // context these checks need, so they run in the user branch and require
-      // the access token to resolve the snapshot / evaluate flags.
-      if (matchingRule && token) {
-        await this.enforceRouteRuleGating(matchingRule, token, request);
+      // Route-rule flag (TBP-472). Only user JWTs carry the context a flag
+      // rule is evaluated against, so it runs in the user branch.
+      if (matchingRule?.featureFlag && token) {
+        await this.enforceRouteRuleFlag(matchingRule, token);
       }
     }
 
@@ -458,149 +379,38 @@ export class BridgeAuthGuard implements CanActivate {
   }
 
   /**
-   * Enforce the TBP-472 route-rule conditions for a user JWT:
-   *   - `featureFlag` → 402 FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED / 403 FEATURE_OFF when off (TBP-756; FeatureFlagService, the same eval path as `@RequireFeatureFlag`).
-   *   - `plans` → 402 Payment Required (`plan_required`) when the tenant's
-   *     subscription plan slug is not in the allow-list.
-   *   - `entitlement` → 402 Payment Required (`entitlement_missing`) when any
-   *     required entitlement key is not granted.
-   *
-   * Fail-closed: any error resolving the subscription/entitlements/flag denies
-   * the request (402 `billing_locked` for plan/entitlement resolution errors,
-   * 403 for flag-evaluation errors).
+   * Enforce a route rule's `featureFlag` for a user JWT (TBP-472): 402
+   * FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED / 403 FEATURE_OFF when off
+   * (TBP-756), via the same evaluation path as `@RequireFeatureFlag`.
+   * Fail-closed: a flag that cannot be evaluated denies with 403.
    */
-  private async enforceRouteRuleGating(
-    rule: RouteRule,
-    token: string,
-    request: object,
-  ): Promise<void> {
-    // 1. Feature flag (403). Reuses the decorator eval path.
-    if (rule.featureFlag) {
-      let flagEnabled: boolean;
-      try {
-        flagEnabled = await this.featureFlagService.evaluateRequirement(rule.featureFlag, token);
-      } catch (error) {
-        // Fail-closed: undeterminable flag → deny.
-        this.configService.log('Route feature flag evaluation error — denying (fail-closed)', {
-          error,
-        });
-        throw new ForbiddenException({
-          statusCode: 403,
-          error: 'Forbidden',
-          message: 'Feature flag could not be evaluated',
-        });
-      }
-      if (!flagEnabled) {
-        const flagName =
-          typeof rule.featureFlag === 'string'
-            ? rule.featureFlag
-            : JSON.stringify(rule.featureFlag);
-        const verdict = this.explainFlagFailure(rule.featureFlag, token);
-        this.configService.log('Route feature flag check failed', {
-          flag: flagName,
-          reason: verdict?.explanation?.reason,
-        });
-        throw featureRefusal(flagName, verdict?.explanation, this.configService.manageRoute);
-      }
-      this.configService.log('Route feature flag check passed');
+  private async enforceRouteRuleFlag(rule: RouteRule, token: string): Promise<void> {
+    if (!rule.featureFlag) return;
+    let flagEnabled: boolean;
+    try {
+      flagEnabled = await this.featureFlagService.evaluateRequirement(rule.featureFlag, token);
+    } catch (error) {
+      // Fail-closed: undeterminable flag → deny.
+      this.configService.log('Route feature flag evaluation error — denying (fail-closed)', {
+        error,
+      });
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'Forbidden',
+        message: 'Feature flag could not be evaluated',
+      });
     }
-
-    const needsPlan = Array.isArray(rule.plans) && rule.plans.length > 0;
-    const requiredEntitlements = this.normalizeEntitlements(rule.entitlement);
-    const needsEntitlement = requiredEntitlements.length > 0;
-
-    if (!needsPlan && !needsEntitlement) {
-      return;
+    if (!flagEnabled) {
+      const flagName =
+        typeof rule.featureFlag === 'string' ? rule.featureFlag : JSON.stringify(rule.featureFlag);
+      const verdict = this.explainFlagFailure(rule.featureFlag, token);
+      this.configService.log('Route feature flag check failed', {
+        flag: flagName,
+        reason: verdict?.explanation?.reason,
+      });
+      throw featureRefusal(flagName, verdict?.explanation, this.configService.manageRoute);
     }
-
-    // 2 & 3. Plan + entitlement both read the tenant snapshot (one round-trip,
-    // shared via BridgePullCache). Fail-closed: snapshot resolution error → 402.
-    // Reuses the verification above rather than verifying the token again.
-    const tenant = this.bridgeService.fromRequest(request);
-
-    if (needsPlan) {
-      let planSlug: string;
-      try {
-        const subscription = await tenant.subscription;
-        planSlug = subscription?.plan?.slug ?? '';
-      } catch (error) {
-        this.configService.log('Subscription resolution error — denying (fail-closed)', { error });
-        throw new PaymentRequiredException({
-          error: 'Payment required',
-          reason: 'billing_locked',
-        });
-      }
-      // TBP-614 — no slug at all means the workspace has no canonical
-      // Billing 2.0 subscription, NOT that it is on the wrong plan. Both used
-      // to answer `plan_required`, which is indistinguishable from a genuine
-      // upsell and sends the reader looking for a billing problem that does
-      // not exist.
-      //
-      // `plans` resolves through `bridge.fromJwt(token).subscription`, i.e.
-      // the canonical Billing 2.0 subscription — a different system from the
-      // per-app `tenant.plan` and from the JWT `plan` claim. A workspace
-      // created before that rollout has no subscription, so it fails here
-      // regardless of which plan it is actually on. Still fail-closed; only
-      // the reported reason changes.
-      if (!planSlug) {
-        this.configService.log(
-          'Route plan check failed — no canonical subscription for this workspace, so no plan could be resolved. `plans:` gates on Billing 2.0; for per-app plans gate on a feature flag with a `tenant.plan` rule instead.',
-          { required: rule.plans },
-        );
-        throw new PaymentRequiredException({
-          error: 'Payment required',
-          reason: 'plan_unresolved',
-          requiredPlan: rule.plans!.join(', '),
-        });
-      }
-
-      if (!rule.plans!.includes(planSlug)) {
-        this.configService.log('Route plan check failed', {
-          required: rule.plans,
-          actual: planSlug,
-        });
-        throw new PaymentRequiredException({
-          error: 'Payment required',
-          reason: 'plan_required',
-          requiredPlan: rule.plans!.join(', '),
-        });
-      }
-      this.configService.log('Route plan check passed', { plan: planSlug });
-    }
-
-    if (needsEntitlement) {
-      for (const key of requiredEntitlements) {
-        let granted: boolean;
-        try {
-          granted = await tenant.entitlements.can(key);
-        } catch (error) {
-          this.configService.log('Entitlement resolution error — denying (fail-closed)', {
-            error,
-            key,
-          });
-          throw new PaymentRequiredException({
-            error: 'Payment required',
-            reason: 'billing_locked',
-            requiredEntitlement: key,
-          });
-        }
-        if (!granted) {
-          this.configService.log('Route entitlement check failed', { required: key });
-          throw new PaymentRequiredException({
-            error: 'Payment required',
-            reason: 'entitlement_missing',
-            requiredEntitlement: key,
-          });
-        }
-      }
-      this.configService.log('Route entitlement check passed', { entitlements: requiredEntitlements });
-    }
-  }
-
-  /** Normalize `entitlement?: string | string[]` to a string[] (all required). */
-  private normalizeEntitlements(entitlement: string | string[] | undefined): string[] {
-    if (!entitlement) return [];
-    return Array.isArray(entitlement) ? entitlement.filter(Boolean) : [entitlement];
+    this.configService.log('Route feature flag check passed');
   }
 
   /**
@@ -669,16 +479,6 @@ export class BridgeAuthGuard implements CanActivate {
    */
   private getRequiredPrivilege(context: ExecutionContext): string | undefined {
     return this.reflector.getAllAndOverride<string>(REQUIRED_PRIVILEGE_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-  }
-
-  /**
-   * Get required role from @RequireRole decorator (user JWT path)
-   */
-  private getRequiredRole(context: ExecutionContext): string | undefined {
-    return this.reflector.getAllAndOverride<string>(REQUIRED_ROLE_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);

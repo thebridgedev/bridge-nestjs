@@ -20,7 +20,7 @@ jest.mock('jose', () => ({
   },
 }));
 
-import { Controller, Delete, ExecutionContext, HttpException, Post } from '@nestjs/common';
+import { Controller, Delete, ExecutionContext, HttpException, Logger, Post } from '@nestjs/common';
 import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
 import { Test, TestingModule } from '@nestjs/testing';
 import { lastValueFrom, of, throwError } from 'rxjs';
@@ -29,7 +29,7 @@ import { BridgeModule, resolveBridgeConfig } from '../bridge.module';
 import { rememberVerifiedUserToken } from '../bridge/verified-request';
 import type { QuotaSnapshot } from '../bridge/tenant-scope';
 import { RequireEntitlement, RequireQuota, SyncQuota } from './quota.decorators';
-import { BridgeQuotaInterceptor } from './quota.interceptor';
+import { BridgeQuotaInterceptor, resetEntitlementNotes } from './quota.interceptor';
 import { BridgeQuotaService } from './quota.service';
 import type { BridgeModuleConfig } from '../types/config';
 
@@ -67,7 +67,7 @@ class TicketsController {
   export() {}
 
   @Post('invite')
-  @RequireQuota('users')
+  @RequireQuota('seats')
   invite() {}
 }
 
@@ -419,12 +419,14 @@ describe('@RequireQuota — gauge (something that exists)', () => {
     expect(warn).toHaveBeenCalled();
   });
 
-  it('seats (`users`, a gauge Bridge keeps) are checked but never reported as counter events', async () => {
-    quotas.users = snap('users', 2, 5, { kind: 'gauge' });
+  it('seats (a gauge counted from membership) are checked, never reported, and need no count', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    quotas.seats = snap('seats', 2, 5, { kind: 'gauge', source: 'membership' });
     await run(TicketsController, 'invite', verifiedRequest());
     expect(writes()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
 
-    quotas.users = snap('users', 5, 5, { kind: 'gauge' });
+    quotas.seats = snap('seats', 5, 5, { kind: 'gauge', source: 'membership' });
     const err = await refusal(run(TicketsController, 'invite', verifiedRequest()));
     expect(err.getStatus()).toBe(402);
   });
@@ -499,6 +501,56 @@ describe('@RequireEntitlement', () => {
     entitlements = {};
     const err = await refusal(run(ReportsController, 'run', verifiedRequest()));
     expect(err.getStatus()).toBe(403);
+  });
+});
+
+// TBP-705 — @RequireEntitlement is the documented exception to "every gate
+// is a flag"; outside production it says so once, naming the flag to use.
+describe('@RequireEntitlement development note', () => {
+  const prevEnv = process.env.NODE_ENV;
+  const expected =
+    `[bridge] @RequireEntitlement('exports') checks the plan directly. The standard is @RequireFeatureFlag with a rule on bridge:billing.entitlement.exports — see "npx @nebulr-group/bridge-cli check gates".`;
+  let warn: jest.SpyInstance;
+  beforeEach(() => {
+    resetEntitlementNotes();
+    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    entitlements = { exports: true, reports: true };
+    quotas.exports = snap('exports', 0, 5);
+    quotas.reports = snap('reports', 0, 5);
+  });
+  afterEach(() => {
+    process.env.NODE_ENV = prevEnv;
+  });
+
+  it('logs once, the first time a handler with it is evaluated', async () => {
+    process.env.NODE_ENV = 'development';
+    await run(TicketsController, 'export', verifiedRequest());
+    await run(TicketsController, 'export', verifiedRequest());
+    const notes = warn.mock.calls.filter(([m]) => String(m).includes('@RequireEntitlement('));
+    expect(notes).toEqual([[expected]]);
+  });
+
+  it('notes each key once (a controller-level one too)', async () => {
+    process.env.NODE_ENV = 'test';
+    await run(TicketsController, 'export', verifiedRequest());
+    await run(ReportsController, 'run', verifiedRequest());
+    await run(ReportsController, 'run', verifiedRequest());
+    const notes = warn.mock.calls.map(([m]) => String(m)).filter((m) => m.includes('@RequireEntitlement('));
+    expect(notes).toHaveLength(2);
+    expect(notes[1]).toContain("@RequireEntitlement('reports')");
+  });
+
+  it('is silent in production', async () => {
+    process.env.NODE_ENV = 'production';
+    await run(TicketsController, 'export', verifiedRequest());
+    expect(warn.mock.calls.filter(([m]) => String(m).includes('@RequireEntitlement('))).toEqual([]);
+  });
+
+  it('is not logged for handlers without it', async () => {
+    process.env.NODE_ENV = 'development';
+    quotas.tickets = snap('tickets', 1, 5, { kind: 'gauge' });
+    await run(TicketsController, 'create', verifiedRequest());
+    expect(warn.mock.calls.filter(([m]) => String(m).includes('@RequireEntitlement('))).toEqual([]);
   });
 });
 
@@ -659,9 +711,9 @@ describe('X-Bridge-Usage-Counted (outside production only) — TBP-697', () => {
     expect(response.headers.get('x-bridge-usage-counted')).toBe('exports');
   });
 
-  it('a gauge Bridge keeps (`users`) is only checked here, so it is not named', async () => {
+  it('a gauge Bridge keeps (seats, counted from membership) is only checked here, so it is not named', async () => {
     process.env.NODE_ENV = 'development';
-    quotas.users = snap('users', 2, 5, { kind: 'gauge' });
+    quotas.seats = snap('seats', 2, 5, { kind: 'gauge', source: 'membership' });
     const response = expressResponse();
     await intercept('invite', response);
     expect(response.headers.has('x-bridge-usage-counted')).toBe(false);

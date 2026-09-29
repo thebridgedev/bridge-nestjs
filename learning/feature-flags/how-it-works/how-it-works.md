@@ -9,7 +9,8 @@ a deploy. Wrap something in a flag and you can:
 - **Roll out gradually**: turn it on for 10% of users, watch, then ramp to
   25%, 50%, 100%.
 - **Target a segment** (an audience defined by attribute rules): turn it on
-  only for a role, a plan, an internal group, or any attribute your app sends.
+  only for holders of a privilege, workspaces whose plan includes a feature,
+  an internal group, or any attribute your app sends.
 - **Kill it instantly**: something's wrong in production? Flip the flag off and
   it works as a kill switch. No rollback, no redeploy.
 
@@ -82,9 +83,8 @@ same user flip-flop request to request). Pass identity per eval; see
 
 `BridgeFlagsModule` is auth-free: an `apiBaseUrl` and `apiKey` are all the
 configuration flags need, no other Bridge module required. With
-`BridgeAuthGuard` verifying the user, rules on their role, privileges and
-token plan work with no wiring; add `BridgeModule` and rules on the
-workspace's billing plan and plan features work too (see
-[Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/)).
+`BridgeAuthGuard` verifying the user, rules on their privileges work with no
+wiring; add `BridgeModule` and rules on the workspace's plan features work too
+(see [Target by plan feature or privilege](/feature-flags/targeting/by-plan-or-role/)).
 
 Next: [Get started](/feature-flags/get-started/).

@@ -15,6 +15,7 @@ import {
   CallHandler,
   ExecutionContext,
   Injectable,
+  Logger,
   NestInterceptor,
 } from '@nestjs/common';
 import { ModuleRef, Reflector } from '@nestjs/core';
@@ -32,6 +33,29 @@ import {
 import { BridgeQuotaService, type QuotaCount } from './quota.service';
 
 /** Requests already handled — the decorators may register this interceptor more than once. */
+const logger = new Logger('Bridge');
+
+/** Entitlement keys the TBP-705 development note was already logged for. */
+const notedEntitlements = new Set<string>();
+
+/**
+ * TBP-705 — `@RequireEntitlement` is the documented exception to "every gate
+ * is a flag". Outside production, say so once per key, the first time a
+ * handler carrying it is evaluated.
+ */
+export function noteDirectEntitlementCheck(key: string): void {
+  if (process.env.NODE_ENV === 'production' || notedEntitlements.has(key)) return;
+  notedEntitlements.add(key);
+  logger.warn(
+    `[bridge] @RequireEntitlement('${key}') checks the plan directly. The standard is @RequireFeatureFlag with a rule on bridge:billing.entitlement.${key} — see "npx @nebulr-group/bridge-cli check gates".`,
+  );
+}
+
+/** Test hook: forget which keys were noted. */
+export function resetEntitlementNotes(): void {
+  notedEntitlements.clear();
+}
+
 const handled = new WeakSet<object>();
 
 interface HttpLikeResponse {
@@ -74,6 +98,7 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
     );
     const sync = this.reflector.get<QuotaMetadata | undefined>(SYNC_QUOTA_KEY, context.getHandler());
     if (!entitlement && !required && !sync) return next.handle();
+    if (entitlement) noteDirectEntitlementCheck(entitlement);
 
     const before = async (): Promise<{ recordCounter: boolean }> => {
       if (entitlement) await this.quota.assertEntitlement(request, entitlement);
@@ -93,7 +118,7 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
         this.markCounted(response, counted);
         throw error;
       }
-      // A gauge nobody counts here (e.g. `users`, which Bridge keeps from
+      // A gauge nobody counts here (e.g. seats, which Bridge keeps from
       // membership) is checked but never reported as a counter event.
       const recordCounter = !required.current && decision.quota?.kind !== 'gauge';
       const checkedOnly = !required.current && !recordCounter;

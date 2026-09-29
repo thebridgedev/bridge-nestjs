@@ -1,5 +1,15 @@
 # Authentication & Access Control
 
+## The one rule for app code
+
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+
+Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
+
+Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+
+In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+
 ## Authentication
 
 ### Accessing user information
@@ -178,7 +188,7 @@ The Bridge NestJS plugin supports two authentication paths:
 
 The guard checks both headers. If an API token is present, it is verified by introspection: the guard POSTs the token to the Bridge, which checks both the signature and the backing record (not revoked, not expired) and returns the token's claims. Those verified claims are attached to `req.bridgeApiToken`. If only a Bearer token is present, the request follows the standard user JWT path, verified locally against Bridge's JWKS endpoint.
 
-> **Backward compatibility:** User JWTs bypass the `@RequirePrivilege()` check. This ensures existing endpoints that add `@RequirePrivilege()` for API token enforcement don't break user JWT access.
+> **API tokens only.** `@RequirePrivilege()` is an API token's scope, for machine callers (x-api-key). It is not a gate on a person: a user JWT is not checked against it. Gate people with `@RequireFeatureFlag()` and a flag rule on a privilege.
 
 ### ApiTokenClaims type
 
@@ -208,7 +218,7 @@ export class UsersController {
   @RequirePrivilege('USER_READ')
   listUsers() {
     // API tokens must have USER_READ privilege
-    // User JWTs bypass this check (backward compatibility)
+    // API tokens only: a user JWT is not checked against it
   }
 
   @Post()
@@ -300,19 +310,19 @@ export class AccountController {
 
 ---
 
-## Role-Based Access Control
+## Gating by role or privilege: a flag
 
-Roles are enforced via the `@RequireRole()` decorator. Roles are **not** part of route rules; they are decorator-only.
+Who may call an endpoint is a flag whose rule names a privilege, e.g. `privileges contains "USER_WRITE"` (in the default setup ADMIN and OWNER hold it). Read the app's real roles and privileges first (`list_roles` / `bridge role list`); prefer a privilege rule over a role rule (`user.role eq "ADMIN"` only when you mean the role itself). `contains` is exact membership.
 
 ### Controller-level and route-level usage
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireRole, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, RequireFeatureFlag, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)
-@RequireRole('ADMIN') // All routes in this controller require ADMIN
+@RequireFeatureFlag('admin-area') // rule: privileges contains "USER_WRITE"
 export class AdminController {
   @Get('dashboard')
   getDashboard(@CurrentUser() user: BridgeUser) {
@@ -320,7 +330,7 @@ export class AdminController {
   }
 
   @Get('settings')
-  @RequireRole('OWNER') // Override: requires OWNER instead of ADMIN
+  @RequireFeatureFlag('admin-settings') // rule: privileges contains "TENANT_WRITE"
   getSettings(@CurrentUser() user: BridgeUser) {
     return { settings: 'sensitive data' };
   }

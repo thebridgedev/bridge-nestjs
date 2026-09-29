@@ -2,7 +2,6 @@ import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import {
   BridgeTenant,
   CurrentTenant,
-  RequireEntitlement,
   RequireQuota,
   SyncQuota,
 } from '@nebulr-group/bridge-nestjs';
@@ -44,14 +43,10 @@ export class TicketsController {
   }
 
   /*
-   * `app_active` is true while the workspace's subscription is active (or in
-   * trial). Bridge also derives one entitlement per hard quota — `exports`
-   * here — which turns false at the limit; pairing @RequireEntitlement with
-   * @RequireQuota on the SAME metric would answer 403 at the cap instead of
-   * the 402 the frontend knows how to upsell, so gate on a capability here.
+   * A number, not a gate: the plan's `exports` limit. Who may export at all
+   * would be a flag (`@RequireFeatureFlag`) with its rule on the plan feature.
    */
   @Post(':id/export')
-  @RequireEntitlement('app_active')
   @RequireQuota('exports')
   export(@CurrentTenant() tenant: BridgeTenant, @Param('id') id: string) {
     const ticket = this.tickets.get(tenant.id, id);

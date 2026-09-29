@@ -15,7 +15,7 @@ You define both in two places:
 - **CLI:** roles only. Create, update, delete, and list them, referencing privileges that already exist.
 - **MCP (AI-assistant integration):** coming soon.
 
-This is entirely platform-side configuration; nothing to install or wire up in your NestJS app. Once a role exists, your app enforces it via `@RequireRole()` and reads it via `@CurrentUser()`. See [How roles & privileges work](/auth/roles/how-it-works/).
+This is entirely platform-side configuration; nothing to install or wire up in your NestJS app. Once a role exists, your app gates on it with a flag ruled on the privileges it grants (`@RequireFeatureFlag()`), and can read it for display via `@CurrentUser()`. See [How roles & privileges work](/auth/roles/how-it-works/).
 
 ## Privileges
 
@@ -47,6 +47,6 @@ bridge role delete --id <roleId>
 
 `--privileges` always takes a comma-separated list of privilege **keys** that already exist; the CLI never creates a new privilege on the fly.
 
-Once you've changed a role's key or privilege list, remember that any `@RequireRole('<key>')` or route-rule `privilege` in your NestJS app referencing the old key needs to be updated too; the guard does an exact string match against what's in the token.
+Once you've changed a role's key or privilege list, check the flag rules that reference it (`privileges contains "<KEY>"` is exact membership) and any `@RequirePrivilege('<key>')` scoping API tokens; your app code does not change.
 
 **Next:** put your roles to work by assigning them, see [Assign roles to users](/auth/roles/assign-roles/).

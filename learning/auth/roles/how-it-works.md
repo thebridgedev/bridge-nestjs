@@ -41,25 +41,26 @@ export class UsersController {
 
 There is no server-side lookup involved; the guard never queries a roles database. Whatever role/privileges are embedded in the token *are* the role/privileges for that request. See [How the token is kept current](/auth/user-token/object-updates/) for what that implies when a role changes mid-session.
 
-## Two separate enforcement mechanisms
+## How roles and privileges are enforced
 
-This is the part that trips people up: **role checks and privilege checks are enforced against different credential types.**
+What a role can do is only true **in the default setup**; every app can change it. Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule.
 
-| Decorator | Applies to | Bypassed by |
+Two mechanisms, for two kinds of caller:
+
+| Mechanism | Applies to | What decides |
 |---|---|---|
-| `@RequireRole(role)` | User JWT only; checks `user.role` | API tokens don't carry a `role`, so this decorator has no effect on API-token-only requests |
-| `@RequirePrivilege(privilege)` | API token only; checks `req.bridgeApiToken.privileges` | User JWTs bypass this check entirely (backward-compatibility: existing endpoints that added `@RequirePrivilege()` for API-token enforcement don't break user-JWT access) |
-| Route-rule `privilege` (e.g. `{ path: '/users/*', privilege: 'USER_READ' }`) | User JWT only; checks `user.privileges` | Only evaluated when a user JWT is present on the request |
+| `@RequireFeatureFlag(key)` (or a route rule's `featureFlag`) | A signed-in person (user JWT) | The flag's rule, e.g. `privileges contains "USER_WRITE"` |
+| `@RequirePrivilege(privilege)` | API tokens only; checks `req.bridgeApiToken.privileges` | The token's scope. It is not a gate on a person, so a user JWT is not checked against it |
 
-In practice: use `@RequireRole()` (or route-rule `privilege`) to gate what a **signed-in person** can do, and `@RequirePrivilege()` to gate what a **token** (script, integration, CI job) can do. See [API tokens](/auth/api-tokens/) for the full API-token auth flow.
+In practice: gate what a **signed-in person** can do with a flag ruled on a privilege, and scope what a **token** (script, integration, CI job) can do with `@RequirePrivilege()`. Prefer a privilege rule over a role rule; write `user.role eq "ADMIN"` only when you mean the role itself. `contains` is exact membership. See [Gate with feature flags](/auth/roles/gate-with-flags/) and [API tokens](/auth/api-tokens/).
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireRole, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
+import { BridgeAuthGuard, RequireFeatureFlag, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)
-@RequireRole('ADMIN') // every route in this controller requires ADMIN
+@RequireFeatureFlag('admin-area') // rule: privileges contains "USER_WRITE"
 export class AdminController {
   @Get('dashboard')
   getDashboard(@CurrentUser() user: BridgeUser) {
@@ -67,13 +68,13 @@ export class AdminController {
   }
 
   @Get('settings')
-  @RequireRole('OWNER') // route-level override: requires OWNER instead of ADMIN
+  @RequireFeatureFlag('admin-settings') // rule: privileges contains "TENANT_WRITE"
   getSettings(@CurrentUser() user: BridgeUser) {
     return { settings: 'sensitive data' };
   }
 }
 ```
 
-Route-level decorators override controller-level ones; the guard uses Nest's `Reflector.getAllAndOverride`, so the most specific decorator wins. A `403 Forbidden` with `"Role '<role>' required"` is thrown when the check fails.
+Route-level decorators override controller-level ones; the guard uses Nest's `Reflector.getAllAndOverride`, so the most specific decorator wins. A refused request gets 403 `FEATURE_NOT_PERMITTED` (or `FEATURE_OFF`) naming the flag.
 
-For anything that must be enforced (not just hidden in a caller's UI), enforce it here, in a guard or decorator on the actual endpoint; never rely on a role check that only exists on the frontend.
+For anything that must be enforced (not just hidden in a caller's UI), put the flag on the actual endpoint too; the same rule answers the same way in the browser and the backend.

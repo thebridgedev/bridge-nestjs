@@ -59,7 +59,7 @@ export class ReportsController {
 
 ## Privilege enforcement is API-token-only
 
-`@RequirePrivilege(privilege)` checks **only** `req.bridgeApiToken.privileges`. It has no effect on a user-JWT-only request; user JWTs bypass it entirely (existing backward-compatibility behavior). This is the single most important thing to get right about this decorator, and it's the flip side of `@RequireRole()`, which checks only the user JWT's role and is a no-op for API-token-only requests. See [How roles & privileges work](/auth/roles/how-it-works/) for the full comparison table.
+`@RequirePrivilege(privilege)` is API tokens only: it checks **only** `req.bridgeApiToken.privileges`, the scope of a machine caller (x-api-key). It is not a gate on a person, so a user-JWT-only request is not checked against it. This is the single most important thing to get right about this decorator. People are gated by a flag (`@RequireFeatureFlag()`) whose rule names a privilege; see [How roles & privileges work](/auth/roles/how-it-works/) for the full comparison table.
 
 ```typescript
 import { Controller, Get, UseGuards } from '@nestjs/common';

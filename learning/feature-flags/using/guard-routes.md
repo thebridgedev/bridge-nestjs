@@ -87,7 +87,7 @@ populated first: the guard evaluates for that verified caller, and a request
 without one is evaluated anonymously. Nothing the client sends, including the
 `x-bridge-context` header, changes the guard's decision. See
 [Per-request context](/feature-flags/using/backend/) and
-[Gate features by role or privilege](/auth/roles/gate-with-flags/).
+[Gate features with flags](/auth/roles/gate-with-flags/).
 
 ## Flag values as handler parameters: @Flag
 

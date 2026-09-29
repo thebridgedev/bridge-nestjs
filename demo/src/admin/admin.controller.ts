@@ -1,16 +1,18 @@
 import { Controller, Get } from '@nestjs/common';
-import { RequireRole, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
+import { RequireFeatureFlag, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
 
 /**
- * Admin controller - all routes require ADMIN role.
- * Role gating is applied at the controller level via @RequireRole('ADMIN');
- * the global BridgeAuthGuard (configured in app.module.ts) enforces it.
+ * Admin controller — every gate is a flag (TBP-705).
+ *
+ * `admin-area` is ruled on a privilege, e.g. `privileges contains "USER_WRITE"`
+ * (in the default setup ADMIN and OWNER hold it). The code asks the flag and
+ * never reads the role; the global BridgeAuthGuard (app.module.ts) enforces it.
  */
 @Controller('admin')
-@RequireRole('ADMIN')
+@RequireFeatureFlag('admin-area')
 export class AdminController {
   /**
-   * List users - requires ADMIN role (from controller-level @RequireRole)
+   * List users — the controller-level `admin-area` flag.
    */
   @Get('users')
   listUsers(@CurrentUser() user: BridgeUser) {
@@ -26,13 +28,15 @@ export class AdminController {
   }
 
   /**
-   * Get settings - requires OWNER role (decorator overrides config)
+   * Settings — its own flag, `admin-settings`, ruled on the privilege that
+   * only the workspace owner holds in the default setup (e.g.
+   * `privileges contains "TENANT_WRITE"`). Overrides the controller flag.
    */
   @Get('settings')
-  @RequireRole('OWNER')
+  @RequireFeatureFlag('admin-settings')
   getSettings(@CurrentUser() user: BridgeUser) {
     return {
-      message: 'Admin settings (OWNER only)',
+      message: 'Admin settings',
       requestedBy: user.email,
       role: user.role,
       settings: {
@@ -44,7 +48,7 @@ export class AdminController {
   }
 
   /**
-   * Get dashboard - uses the controller-level ADMIN role
+   * Dashboard — the controller-level `admin-area` flag.
    */
   @Get('dashboard')
   getDashboard(@CurrentUser() user: BridgeUser) {

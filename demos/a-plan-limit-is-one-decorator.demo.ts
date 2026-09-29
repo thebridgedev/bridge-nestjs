@@ -35,8 +35,8 @@ import { join } from 'node:path';
 
 const STAGE = 'https://api-stage.thebridge.dev';
 const API_DIR = process.env.DEMO_BRIDGE_API_DIR ?? '/Users/imanpouya/code/nebulr/thebridge-platform/bridge-api';
-const NESTJS_VERSION = process.env.DEMO_NESTJS_VERSION ?? '0.8.0-beta.0';
-const AUTH_CORE_VERSION = process.env.DEMO_AUTH_CORE_VERSION ?? '0.8.0-beta.0';
+const NESTJS_VERSION = process.env.DEMO_NESTJS_VERSION ?? '0.8.0-beta.1';
+const AUTH_CORE_VERSION = process.env.DEMO_AUTH_CORE_VERSION ?? '0.8.0-beta.3';
 const DOMAIN = 'demo-quota-decorators';
 const OWNER = 'demo-quota-decorators@example.com';
 const ORIGIN = 'http://localhost:5173';
