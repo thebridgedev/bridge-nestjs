@@ -195,6 +195,31 @@ describe('BridgeConfigService', () => {
       ).toThrow(/guard\.rules\[0\] \(graphqlOperation 'listUsers'\) uses `role`/);
     });
 
+    describe('tokenPrivilege: a multi-app server enforcing the calling app\'s own permissions', () => {
+      const anyApp = (...rules: Record<string, unknown>[]) => ({ acceptTokensFromAnyApp: true, guard: { rules } });
+
+      it('is accepted on an AUTHENTICATED rule when the server accepts tokens from any app', () => {
+        expect(() =>
+          makeService(anyApp({ graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', tokenPrivilege: 'USER_WRITE' })),
+        ).not.toThrow();
+      });
+
+      it('is refused in an ordinary app, which gates with a flag', () => {
+        expect(() =>
+          makeService(rulesOf({ graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', tokenPrivilege: 'USER_WRITE' })),
+        ).toThrow(/uses `tokenPrivilege`, which is only for a server that accepts tokens from any app.*privileges contains "USER_WRITE"/s);
+      });
+
+      it('needs a signed-in caller and a named privilege', () => {
+        expect(() =>
+          makeService(anyApp({ graphqlOperation: 'deleteUser', privilege: 'ANONYMOUS', tokenPrivilege: 'USER_WRITE' })),
+        ).toThrow(/use privilege: 'AUTHENTICATED'/);
+        expect(() =>
+          makeService(anyApp({ graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', tokenPrivilege: '' })),
+        ).toThrow(/it must name a privilege/);
+      });
+    });
+
     it('lists every offending rule in one error, and points at the gate check', () => {
       let message = '';
       try {

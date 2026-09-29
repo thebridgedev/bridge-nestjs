@@ -239,6 +239,31 @@ describe('BridgeAuthGuard', () => {
     });
   });
 
+  describe('route-rule tokenPrivilege (multi-app server: the caller\'s own app permissions)', () => {
+    const rule = { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED' as const, tokenPrivilege: 'USER_WRITE' };
+
+    it('refuses a user whose token lacks the privilege with 403', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(rule);
+      jwksService.verifyToken.mockResolvedValue({ ...mockClaims, privileges: ['USER_READ'] } as any);
+
+      const ctx = makeContext({ headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
+      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
+        response: { message: "Privilege 'USER_WRITE' required" },
+      });
+    });
+
+    it('lets a user whose token carries it through', async () => {
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue(rule);
+      jwksService.verifyToken.mockResolvedValue({ ...mockClaims, privileges: ['USER_READ', 'USER_WRITE'] } as any);
+
+      const ctx = makeContext({ headers: { authorization: 'Bearer token' } });
+      await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    });
+  });
+
   describe('feature flag checks (decorator)', () => {
     it('should delegate to FeatureFlagService when flag decorator is present', async () => {
       reflector.getAllAndOverride
