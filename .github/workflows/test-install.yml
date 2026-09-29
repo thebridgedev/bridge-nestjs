@@ -1,4 +1,5 @@
-# Test that the packed package installs cleanly with NestJS 10 and NestJS 11
+# Test that the packed package installs cleanly with NestJS 10, 11 and 12, and
+# that a real app boots with the guard on each (TBP-760)
 name: Test install
 
 on:
@@ -13,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nest-version: ['10', '11']
+        nest-version: ['10', '11', '12']
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +40,7 @@ jobs:
           npm install \
             @nestjs/common@^${{ matrix.nest-version }}.0.0 \
             @nestjs/core@^${{ matrix.nest-version }}.0.0 \
+            @nestjs/platform-express@^${{ matrix.nest-version }}.0.0 \
             reflect-metadata@^0.2.0 \
             rxjs@^7.0.0
           npm install ../install-test-pkg.tgz
@@ -56,3 +58,9 @@ jobs:
             if (!pkg.BridgeHttpError) throw new Error('BridgeHttpError not exported');
             console.log('All exports OK for NestJS ${{ matrix.nest-version }}');
           "
+
+      - name: Boot an app with the guard
+        run: |
+          cp .github/workflows/scripts/nest-boot-smoke.js install-test/
+          cd install-test
+          node nest-boot-smoke.js

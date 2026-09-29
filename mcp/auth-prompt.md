@@ -74,6 +74,8 @@ BridgeModule.forRoot({
 }),
 ```
 
+Rule paths are the full request path, **including a global prefix**: with `app.setGlobalPrefix('api')` the health check is `/api/health`, so the rule is `{ path: '/api/health', … }`. A rule written without the prefix never matches (the plugin warns once at the first such request). For a single endpoint, `@Public()` on the handler avoids the question entirely.
+
 **Per-controller / per-route guard.** If you prefer not to run globally, apply `@UseGuards(BridgeAuthGuard)` to the controllers or handlers that need protection:
 
 ```ts
@@ -240,7 +242,7 @@ export class AppController {
 }
 ```
 
-Prefer the centralized `rules` config (`privilege: 'ANONYMOUS'`) for whole paths, and reserve `@Public()` for per-handler exceptions.
+Prefer `@Public()` on the handler: it follows the route wherever it is mounted, global prefix included. Use a rule (`privilege: 'ANONYMOUS'`) for a whole group of paths you do not own as handlers, such as `/api/webhooks/*`, and write it with the full path.
 
 ## Verifying a token manually (advanced)
 

@@ -47,7 +47,7 @@ Protection here is **declarative**. It lives in `BridgeModule.forRoot()` and in 
 | Every route protected unless stated otherwise | `guard: { global: true, defaultAccess: 'protected' }` in `BridgeModule.forRoot()` |
 | Only certain controllers protected | leave `guard.global` off, put `@UseGuards(BridgeAuthGuard)` on those controllers |
 | A whole path open to the world | a `rules` entry with `privilege: 'ANONYMOUS'` |
-| One handler open on an otherwise-protected path | `@Public()` on that handler |
+| One handler open on an otherwise-protected path | `@Public()` on that handler (preferred for single endpoints: it follows the route wherever it is mounted) |
 | A path or handler only some people get (a privilege, a plan feature, a rollout) | `featureFlag` on its `rules` entry, or `@RequireFeatureFlag('…')` on the handler — the flag's rule says why; see `feature-flags-prompt.md` and, for plan features, `billing-prompt.md` |
 | A plan limit on the handler that creates the thing | `@RequireQuota('…')`, and `@SyncQuota` on the delete for things that exist — see `billing-prompt.md` |
 | An API token (machine caller) to hold a scope | `@RequirePrivilege('…')` — API tokens only; see `auth-prompt.md` |
@@ -61,7 +61,7 @@ If the user has not said which they want, default to the global guard and mark e
 
 - **appId** — your Bridge application ID. Get it from `bridge app get` or the Bridge dashboard.
 - **Package manager** — use whatever the project already uses (check for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, or `package-lock.json`).
-- An existing NestJS app (`@nestjs/common` and `@nestjs/core` ^10 or ^11).
+- An existing NestJS app (`@nestjs/common` and `@nestjs/core` ^10, ^11 or ^12; a project from today's `nest new` is 12 and works as is).
 
 ## Migration check
 
@@ -97,8 +97,8 @@ Replace `npm i` with the project's package manager (`bun add`, `pnpm add`, `yarn
 `@nebulr-group/bridge-auth-core` is a dependency of the plugin and installs with it; there is no second package to add by hand. All JWT and API-token verification is delegated to auth-core's `JwksService`.
 
 Peer dependencies (already present in any NestJS project):
-- `@nestjs/common` (^10.0.0 || ^11.0.0)
-- `@nestjs/core` (^10.0.0 || ^11.0.0)
+- `@nestjs/common` (^10.0.0 || ^11.0.0 || ^12.0.0)
+- `@nestjs/core` (^10.0.0 || ^11.0.0 || ^12.0.0)
 
 ## Register the Bridge module
 
@@ -165,7 +165,7 @@ BridgeModule.forRoot({
 ```
 
 **RouteRule schema** (`{ path?, graphqlOperation?, privilege, featureFlag? }`):
-- `path` — REST URL wildcard pattern. `*` matches a path segment: `/cards/*` matches `/cards/123`, `/cards/search`, etc.
+- `path` — REST URL wildcard pattern, matched against the **full** request path including any global prefix: with `app.setGlobalPrefix('api')` write `/api/cards/*`, not `/cards/*`. A rule that misses only because of the prefix logs a one-time warning naming the path to write. `*` matches the rest of the path: `/cards/*` matches `/cards/123`, `/cards/search`, etc.
 - `graphqlOperation` — GraphQL operation name (case-sensitive camelCase, e.g. `'listUsers'`). Provide `path`, `graphqlOperation`, or both.
 - `privilege` — `'ANONYMOUS'` or `'AUTHENTICATED'` (see below).
 - `featureFlag` — optional flag requirement (`'key'`, `{ any: [...] }` or `{ all: [...] }`); the flag's rule says who gets the route. An off flag refuses with 402 `FEATURE_NOT_IN_PLAN` / 403 `FEATURE_NOT_PERMITTED` / 403 `FEATURE_OFF`.
