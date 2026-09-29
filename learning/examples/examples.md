@@ -186,7 +186,7 @@ export class ReportsService {
 
 The plan feature is gated by a flag: list `pdf-export` on the plans that sell it
 (`bridge plan feature add pro pdf-export`) and rule the flag
-`bridge:billing.entitlement.pdf-export eq true`. A workspace without it gets
+`bridge:billing.entitlement.pdf_export eq true`. A workspace without it gets
 `402 FEATURE_NOT_IN_PLAN` with the upgrade route.
 
 ```typescript

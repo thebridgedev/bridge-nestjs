@@ -261,7 +261,7 @@ export class ReportsController {
   constructor(private readonly bridge: BridgeService) {}
 
   @Get('export')
-  @RequireFeatureFlag('pdf-export') // flag rule: bridge:billing.entitlement.pdf-export eq true
+  @RequireFeatureFlag('pdf-export') // flag rule: bridge:billing.entitlement.pdf_export eq true
   async export(@Req() req: Request) {
     const tenant = this.bridge.fromRequest(req);
     const sub = await tenant.subscription;   // { plan: { slug, name }, status, endsAt?, gateEngaged? }

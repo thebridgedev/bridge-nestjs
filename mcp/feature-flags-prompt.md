@@ -192,7 +192,7 @@ A rule is **branches + otherwiseValue + rolloutPct**, first match wins:
 ```jsonc
 {
   "branches": [
-    { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise-export", "operator": "eq", "values": [true] } ],
+    { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise_export", "operator": "eq", "values": [true] } ],
       "returnValue": true }
   ],
   "otherwiseValue": false,
@@ -228,7 +228,7 @@ Creating the flag from the rule above, in either channel:
   "state": "on-with-rule",
   "rule": {
     "branches": [
-      { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise-export", "operator": "eq", "values": [true] } ],
+      { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise_export", "operator": "eq", "values": [true] } ],
         "returnValue": true }
     ],
     "otherwiseValue": false,
@@ -240,7 +240,7 @@ Creating the flag from the rule above, in either channel:
 ```bash
 # CLI — same flag
 bridge flag create --key enterprise-export --value-type boolean --state on-with-rule \
-  --rule '{"branches":[{"conditions":[{"attribute":"bridge:billing.entitlement.enterprise-export","operator":"eq","values":[true]}],"returnValue":true}],"otherwiseValue":false,"rolloutPct":100}'
+  --rule '{"branches":[{"conditions":[{"attribute":"bridge:billing.entitlement.enterprise_export","operator":"eq","values":[true]}],"returnValue":true}],"otherwiseValue":false,"rolloutPct":100}'
 ```
 
 **Flipping a flag on or off**, without touching its rule — the channels differ here, and it costs you a round-trip:
@@ -269,8 +269,8 @@ Inspect current state with `list_feature_flags` (MCP) or `bridge flag list` / `b
 | Bulk export / import | `export_feature_flags`, `import_feature_flags` | `bridge flag export`, `bridge flag import` |
 
 ```bash
-bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise-export=true   # → true
-bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise-export=false  # → false
+bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=true   # → true
+bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=false  # → false
 ```
 
 `evaluate_feature_flag` takes `key`, `identity` and `attributes` and runs the live config through the same evaluator the server and the SDKs use, so its verdict is what the app would see. Writing nothing, it is the cheap way to check targeting before you ship code that depends on it. A rule with `rolloutPct < 100` needs an `identity` to bucket on.
@@ -363,7 +363,7 @@ Also not supported: there is no `refresh()` on `BridgeFlagsService`, and no auto
 5. **Flip it on.** `toggle_feature_flag { key: 'demo-flag', enabled: true }` (MCP), or `bridge flag toggle --id <id> --enabled true` / `bridge flag update --id <id> --state on` with the id from step 4 (CLI). Dashboard only if you have neither.
 6. **Observe the change.** Re-run the same two curls: **200**, and `{"demo-flag":true}` — with no redeploy and no restart, because the change arrived over the channel.
 7. **Flip it back off** and confirm both revert.
-8. **Targeting (if you wrote a rule).** Dry-run it: `evaluate_feature_flag { key, identity: 'user-123', attributes: { 'bridge:billing.entitlement.enterprise-export': true } }` over MCP, or `bridge flag eval <key> --identity user-123 --attribute bridge:billing.entitlement.enterprise-export=true` on the CLI. Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
+8. **Targeting (if you wrote a rule).** Dry-run it: `evaluate_feature_flag { key, identity: 'user-123', attributes: { 'bridge:billing.entitlement.enterprise_export': true } }` over MCP, or `bridge flag eval <key> --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=true` on the CLI. Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
 
 ---
 

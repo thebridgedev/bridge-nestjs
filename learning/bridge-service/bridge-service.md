@@ -162,7 +162,7 @@ const fresh = await tenant.subscription; // re-fetched
 
 A feature a plan sells is gated by a flag, like every other gate: list the feature on the plans that
 sell it (`bridge plan feature add pro pdf-export`), rule the flag
-`bridge:billing.entitlement.pdf-export eq true`, and put `@RequireFeatureFlag('pdf-export')` on the
+`bridge:billing.entitlement.pdf_export eq true`, and put `@RequireFeatureFlag('pdf-export')` on the
 handler. A workspace without it gets `402 FEATURE_NOT_IN_PLAN` with the upgrade route. There is no
 checkout or paywall in a backend plugin; purchase and upgrade flows live in your frontend and in the
 Bridge API (webhooks drive the subscription lifecycle). Plan limits (numbers) are `@RequireQuota`; see
