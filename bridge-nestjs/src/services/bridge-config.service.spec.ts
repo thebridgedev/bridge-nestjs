@@ -51,6 +51,37 @@ describe('BridgeConfigService', () => {
     });
   });
 
+  // TBP-540 — the owner's NestJS 12 run: `setGlobalPrefix('api')` made
+  // `{ path: '/health' }` never match, so the public health check answered 401
+  // with nothing saying why.
+  describe('a rule written without the global prefix', () => {
+    const rules = [
+      { path: '/health', privilege: 'ANONYMOUS' },
+      { path: '/webhooks/*', privilege: 'ANONYMOUS' },
+    ];
+    let warn: jest.SpyInstance;
+    beforeEach(() => {
+      warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => warn.mockRestore());
+
+    it('still does not match, and says once which path to write', () => {
+      const svc = makeService({ guard: { rules } });
+      expect(svc.findMatchingRule('/api/health', 'GET')).toBeNull();
+      expect(svc.findMatchingRule('/api/health', 'GET')).toBeNull();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain("write '/api/health'");
+      expect(warn.mock.calls[0][0]).toContain('@Public()');
+    });
+
+    it('is quiet when the rule already has the prefix, or nothing would match', () => {
+      const svc = makeService({ guard: { rules: [{ path: '/api/health', privilege: 'ANONYMOUS' }] } });
+      expect(svc.findMatchingRule('/api/health', 'GET')).toEqual(expect.objectContaining({ path: '/api/health' }));
+      expect(svc.findMatchingRule('/api/tickets', 'GET')).toBeNull();
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
   describe('findMatchingRule', () => {
     const rules = [
       { path: '/health', privilege: 'ANONYMOUS' },
