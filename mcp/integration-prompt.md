@@ -94,7 +94,7 @@ npm i @nebulr-group/bridge-nestjs
 
 Replace `npm i` with the project's package manager (`bun add`, `pnpm add`, `yarn add`).
 
-`@nebulr-group/bridge-auth-core` is a peer dependency that npm, pnpm and bun install with it; there is no second package to add by hand. All JWT and API-token verification is delegated to auth-core's `JwksService`.
+`@nebulr-group/bridge-auth-core` is a dependency of the plugin and installs with it; there is no second package to add by hand. All JWT and API-token verification is delegated to auth-core's `JwksService`.
 
 Peer dependencies (already present in any NestJS project):
 - `@nestjs/common` (^10.0.0 || ^11.0.0)
