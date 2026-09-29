@@ -190,10 +190,7 @@ describe('BridgeAuthGuard (@RequireFeatureFlag, route rules) refusals', () => {
     const reflector: any = { getAllAndOverride: jest.fn() };
     const jwks: any = { verifyToken: jest.fn().mockResolvedValue(claims), verifyApiToken: jest.fn() };
     const flags = new FeatureFlagService(configService);
-    const guard = new BridgeAuthGuard(reflector, configService, jwks, flags, {
-      fromJwt: jest.fn(),
-      fromRequest: jest.fn(),
-    } as any);
+    const guard = new BridgeAuthGuard(reflector, configService, jwks, flags);
     return { guard, reflector, configService };
   }
 

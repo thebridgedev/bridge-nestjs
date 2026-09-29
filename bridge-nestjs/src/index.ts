@@ -8,7 +8,6 @@ export { BridgeAuthGuard } from './guards/bridge-auth.guard';
 export { CurrentUser } from './decorators/current-user.decorator';
 export { CurrentTenant } from './decorators/current-tenant.decorator';
 export { Public, IS_PUBLIC_KEY } from './decorators/public.decorator';
-export { RequireRole, REQUIRED_ROLE_KEY } from './decorators/require-role.decorator';
 export { RequireFeatureFlag, REQUIRED_FEATURE_FLAG_KEY } from './decorators/require-feature-flag.decorator';
 export { RequirePrivilege, REQUIRED_PRIVILEGE_KEY } from './decorators/require-privilege.decorator';
 export { AcceptAuth, ACCEPT_AUTH_KEY, type AuthType } from './decorators/accept-auth.decorator';

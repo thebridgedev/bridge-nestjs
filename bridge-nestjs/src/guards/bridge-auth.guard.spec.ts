@@ -21,7 +21,6 @@ import { BridgeConfigService } from '../services/bridge-config.service';
 import { JwksService, TokenVerificationError } from '../services/jwks.service';
 import { FeatureFlagService } from '../services/feature-flag.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { REQUIRED_ROLE_KEY } from '../decorators/require-role.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-feature-flag.decorator';
 import { REQUIRED_PRIVILEGE_KEY } from '../decorators/require-privilege.decorator';
 import { ACCEPT_AUTH_KEY } from '../decorators/accept-auth.decorator';
@@ -43,7 +42,6 @@ function makeContext(overrides: {
   method?: string;
   headers?: Record<string, string>;
   isPublicDecorator?: boolean;
-  requiredRole?: string;
   requiredFlag?: any;
   bridgeApiToken?: ApiTokenClaims;
 }): ExecutionContext {
@@ -82,11 +80,6 @@ describe('BridgeAuthGuard', () => {
   let configService: jest.Mocked<BridgeConfigService>;
   let jwksService: jest.Mocked<JwksService>;
   let featureFlagService: jest.Mocked<FeatureFlagService>;
-  let bridgeService: { fromJwt: jest.Mock; fromRequest: jest.Mock };
-  let tenantScope: {
-    subscription: Promise<any>;
-    entitlements: { can: jest.Mock };
-  };
 
   beforeEach(() => {
     reflector = {
@@ -109,23 +102,11 @@ describe('BridgeAuthGuard', () => {
       evaluateRequirement: jest.fn(),
     } as any;
 
-    // TBP-472 — default TenantScope: no entitlements, no plan. Individual
-    // tests override `tenantScope.subscription` / `tenantScope.entitlements.can`.
-    tenantScope = {
-      subscription: Promise.resolve({ plan: { slug: 'free', name: 'Free' }, status: 'active' }),
-      entitlements: { can: jest.fn().mockResolvedValue(false) },
-    };
-    bridgeService = {
-      fromJwt: jest.fn(() => tenantScope),
-      fromRequest: jest.fn(() => tenantScope),
-    };
-
     guard = new BridgeAuthGuard(
       reflector,
       configService,
       jwksService,
       featureFlagService,
-      bridgeService as any,
     );
   });
 
@@ -230,25 +211,7 @@ describe('BridgeAuthGuard', () => {
     });
   });
 
-  describe('privilege checks from route rules', () => {
-    it('should throw ForbiddenException when user lacks required privilege', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({ path: '/admin/*', privilege: 'TENANT_WRITE' });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any); // no privileges
-
-      const ctx = makeContext({ path: '/admin/users', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should pass when user has required privilege', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({ path: '/admin/*', privilege: 'TENANT_WRITE' });
-      jwksService.verifyToken.mockResolvedValue({ ...mockClaims, privileges: ['TENANT_WRITE'] } as any);
-
-      const ctx = makeContext({ path: '/admin/users', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).resolves.toBe(true);
-    });
-
+  describe('route-rule privilege is only ANONYMOUS / AUTHENTICATED (TBP-705)', () => {
     it('should allow AUTHENTICATED privilege for any valid JWT', async () => {
       reflector.getAllAndOverride.mockReturnValue(undefined);
       configService.findMatchingRule.mockReturnValue({ path: '/admin/*', privilege: 'AUTHENTICATED' });
@@ -257,31 +220,22 @@ describe('BridgeAuthGuard', () => {
       const ctx = makeContext({ path: '/admin/users', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
     });
-  });
 
-  describe('role checks (decorator)', () => {
-    it('should throw ForbiddenException when user role does not match decorator role', async () => {
-      reflector.getAllAndOverride
-        .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
-        .mockReturnValueOnce(undefined) // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce('ADMIN');  // REQUIRED_ROLE_KEY
-      configService.findMatchingRule.mockReturnValue({ path: '/admin/*', privilege: 'AUTHENTICATED' });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any); // role: 'USER'
-
-      const ctx = makeContext({ path: '/admin/settings', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-    });
-
-    it('should pass when user role matches decorator role', async () => {
-      reflector.getAllAndOverride
-        .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
-        .mockReturnValueOnce(undefined) // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce('USER');   // REQUIRED_ROLE_KEY
-      configService.findMatchingRule.mockReturnValue({ path: '/admin/*', privilege: 'AUTHENTICATED' });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any); // role: 'USER'
+    it('never reads the user\'s role or privileges to decide — a flag does', async () => {
+      // A user JWT with no privileges and a plain role reaches an
+      // AUTHENTICATED route; who gets it is the rule's flag, evaluated below.
+      reflector.getAllAndOverride.mockReturnValue(undefined);
+      configService.findMatchingRule.mockReturnValue({
+        path: '/admin/*',
+        privilege: 'AUTHENTICATED',
+        featureFlag: 'admin-area',
+      });
+      jwksService.verifyToken.mockResolvedValue({ ...mockClaims, role: 'USER', privileges: [] } as any);
+      featureFlagService.evaluateRequirement.mockResolvedValue(true);
 
       const ctx = makeContext({ path: '/admin/users', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
+      expect(featureFlagService.evaluateRequirement).toHaveBeenCalledWith('admin-area', 'token');
     });
   });
 
@@ -290,7 +244,6 @@ describe('BridgeAuthGuard', () => {
       reflector.getAllAndOverride
         .mockReturnValueOnce(undefined)      // IS_PUBLIC_KEY
         .mockReturnValueOnce(undefined)      // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce(undefined)      // REQUIRED_ROLE_KEY
         .mockReturnValueOnce('beta-access'); // REQUIRED_FEATURE_FLAG_KEY
       configService.findMatchingRule.mockReturnValue({ path: '/beta/*', privilege: 'AUTHENTICATED' });
       jwksService.verifyToken.mockResolvedValue(mockClaims as any);
@@ -305,7 +258,6 @@ describe('BridgeAuthGuard', () => {
       reflector.getAllAndOverride
         .mockReturnValueOnce(undefined)      // IS_PUBLIC_KEY
         .mockReturnValueOnce(undefined)      // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce(undefined)      // REQUIRED_ROLE_KEY
         .mockReturnValueOnce('beta-access'); // REQUIRED_FEATURE_FLAG_KEY
       configService.findMatchingRule.mockReturnValue({ path: '/beta/*', privilege: 'AUTHENTICATED' });
       jwksService.verifyToken.mockResolvedValue(mockClaims as any);
@@ -313,196 +265,6 @@ describe('BridgeAuthGuard', () => {
 
       const ctx = makeContext({ path: '/beta/feature', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-    });
-  });
-
-  describe('route-rule plan gating (TBP-472, 402)', () => {
-    it('passes when tenant plan is in the rule allow-list', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/reports/*',
-        privilege: 'AUTHENTICATED',
-        plans: ['pro', 'enterprise'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.subscription = Promise.resolve({ plan: { slug: 'pro', name: 'Pro' } });
-
-      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).resolves.toBe(true);
-      // TBP-673 — reads the snapshot through the request it just verified,
-      // instead of handing the raw token to fromJwt to verify a second time.
-      expect(bridgeService.fromRequest).toHaveBeenCalledTimes(1);
-      expect(bridgeService.fromJwt).not.toHaveBeenCalled();
-    });
-
-    // TBP-614 — reported by a consuming app reading the source and asking us
-    // to confirm or correct it. The reading was correct: a workspace with no
-    // canonical Billing 2.0 subscription resolves `planSlug` to '' and was
-    // denied with `plan_required`, indistinguishable from a genuine upsell.
-    // For an app whose customers predate the Billing 2.0 rollout that is a
-    // 402 for the entire user base, reported as "nobody has bought this".
-    it('denies with plan_unresolved, not plan_required, when the workspace has no canonical subscription', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/reports/*',
-        privilege: 'AUTHENTICATED',
-        plans: ['pro', 'enterprise'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      // No canonical subscription — what a pre-Billing-2.0 workspace returns.
-      tenantScope.subscription = Promise.resolve(undefined);
-
-      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        response: { reason: 'plan_unresolved' },
-      });
-    });
-
-    it('still denies — the distinction is diagnostic, not a loosening', async () => {
-      // The reason changed; the fail-closed behaviour did not. Worth pinning
-      // separately so a future edit cannot turn a clearer message into an
-      // accidental bypass.
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/reports/*',
-        privilege: 'AUTHENTICATED',
-        plans: ['pro'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.subscription = Promise.resolve(undefined);
-
-      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toThrow();
-    });
-
-    it('a resolved-but-disallowed plan still reports plan_required', async () => {
-      // The other half of the split: this case must NOT drift to
-      // plan_unresolved, or the new reason becomes meaningless.
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/reports/*',
-        privilege: 'AUTHENTICATED',
-        plans: ['enterprise'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.subscription = Promise.resolve({ plan: { slug: 'free', name: 'Free' } });
-
-      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        response: { reason: 'plan_required' },
-      });
-    });
-
-    it('denies with 402 plan_required when tenant plan is not allowed', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/reports/*',
-        privilege: 'AUTHENTICATED',
-        plans: ['pro', 'enterprise'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.subscription = Promise.resolve({ plan: { slug: 'free', name: 'Free' } });
-
-      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        status: 402,
-        response: {
-          statusCode: 402,
-          error: 'Payment required',
-          reason: 'plan_required',
-          requiredPlan: 'pro, enterprise',
-        },
-      });
-    });
-
-    it('fail-closed: subscription resolution error → 402 billing_locked', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/reports/*',
-        privilege: 'AUTHENTICATED',
-        plans: ['pro'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.subscription = Promise.reject(new Error('session/init 500'));
-
-      const ctx = makeContext({ path: '/reports/x', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        status: 402,
-        response: { reason: 'billing_locked' },
-      });
-    });
-  });
-
-  describe('route-rule entitlement gating (TBP-472, 402)', () => {
-    it('passes when tenant has the required entitlement', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/export',
-        privilege: 'AUTHENTICATED',
-        entitlement: 'export',
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.entitlements.can.mockResolvedValue(true);
-
-      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).resolves.toBe(true);
-      expect(tenantScope.entitlements.can).toHaveBeenCalledWith('export');
-    });
-
-    it('denies with 402 entitlement_missing when entitlement absent', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/export',
-        privilege: 'AUTHENTICATED',
-        entitlement: 'export',
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.entitlements.can.mockResolvedValue(false);
-
-      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        status: 402,
-        response: {
-          statusCode: 402,
-          error: 'Payment required',
-          reason: 'entitlement_missing',
-          requiredEntitlement: 'export',
-        },
-      });
-    });
-
-    it('requires ALL entitlements when given an array (denies if one missing)', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/export',
-        privilege: 'AUTHENTICATED',
-        entitlement: ['export', 'bulk'],
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.entitlements.can.mockImplementation((k: string) => Promise.resolve(k === 'export'));
-
-      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        status: 402,
-        response: { reason: 'entitlement_missing', requiredEntitlement: 'bulk' },
-      });
-    });
-
-    it('fail-closed: entitlement resolution error → 402 billing_locked', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/export',
-        privilege: 'AUTHENTICATED',
-        entitlement: 'export',
-      });
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any);
-      tenantScope.entitlements.can.mockRejectedValue(new Error('snapshot failed'));
-
-      const ctx = makeContext({ path: '/export', headers: { authorization: 'Bearer token' } });
-      await expect(guard.canActivate(ctx)).rejects.toMatchObject({
-        status: 402,
-        response: { reason: 'billing_locked', requiredEntitlement: 'export' },
-      });
     });
   });
 
@@ -551,8 +313,8 @@ describe('BridgeAuthGuard', () => {
     });
   });
 
-  describe('route-rule gating backward compatibility (TBP-472)', () => {
-    it('rules without plans/entitlement/featureFlag behave exactly as today (no snapshot fetch)', async () => {
+  describe('route rule without a featureFlag (TBP-472)', () => {
+    it('evaluates no flag', async () => {
       reflector.getAllAndOverride.mockReturnValue(undefined);
       configService.findMatchingRule.mockReturnValue({
         path: '/items',
@@ -562,8 +324,6 @@ describe('BridgeAuthGuard', () => {
 
       const ctx = makeContext({ path: '/items', headers: { authorization: 'Bearer token' } });
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
-      expect(bridgeService.fromJwt).not.toHaveBeenCalled();
-      expect(bridgeService.fromRequest).not.toHaveBeenCalled();
       expect(featureFlagService.evaluateRequirement).not.toHaveBeenCalled();
     });
   });
@@ -703,11 +463,10 @@ describe('BridgeAuthGuard', () => {
       await expect(guard.canActivate(ctx)).resolves.toBe(true);
     });
 
-    it('user JWT + @RequirePrivilege → 200 (backward compat, privilege check skipped for user tokens)', async () => {
+    it('user JWT + @RequirePrivilege → 200 (API tokens only: a person is not checked against it)', async () => {
       reflector.getAllAndOverride
         .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
         .mockReturnValueOnce(undefined) // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce(undefined) // REQUIRED_ROLE_KEY (no API token → REQUIRED_PRIVILEGE_KEY not checked)
         .mockReturnValueOnce(undefined); // REQUIRED_FEATURE_FLAG_KEY
       jwksService.verifyToken.mockResolvedValue(mockClaims as any);
 
@@ -825,50 +584,6 @@ describe('BridgeAuthGuard', () => {
       expect(res._headers['WWW-Authenticate']).toContain('missing_token');
     });
 
-    it('both headers + route privilege the user satisfies → returns true with both contexts', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/admin/*',
-        privilege: 'TENANT_WRITE',
-      });
-      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
-      jwksService.verifyToken.mockResolvedValue({
-        ...mockClaims,
-        privileges: ['TENANT_WRITE'],
-      } as any);
-
-      const ctx = makeContext({
-        path: '/admin/users',
-        headers: {
-          authorization: 'Bearer user.jwt.token',
-          'x-api-key': 'valid.api.token',
-        },
-      });
-      await expect(guard.canActivate(ctx)).resolves.toBe(true);
-      const req = ctx.switchToHttp().getRequest() as any;
-      expect(req.bridgeApiToken).toEqual(mockApiTokenClaims);
-      expect(req.bridgeUser).toBeDefined();
-    });
-
-    it('both headers + route privilege the user lacks → 403 (JWT-side privilege denial still enforced)', async () => {
-      reflector.getAllAndOverride.mockReturnValue(undefined);
-      configService.findMatchingRule.mockReturnValue({
-        path: '/admin/*',
-        privilege: 'TENANT_WRITE',
-      });
-      jwksService.verifyApiToken.mockResolvedValue(mockApiTokenClaims);
-      jwksService.verifyToken.mockResolvedValue(mockClaims as any); // no privileges
-
-      const ctx = makeContext({
-        path: '/admin/users',
-        headers: {
-          authorization: 'Bearer user.jwt.token',
-          'x-api-key': 'valid.api.token',
-        },
-      });
-      await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenException);
-    });
-
     it('both headers + @RequirePrivilege the API token lacks → 403 (API-side privilege denial still enforced)', async () => {
       reflector.getAllAndOverride
         .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
@@ -938,7 +653,6 @@ describe('BridgeAuthGuard', () => {
       reflector.getAllAndOverride
         .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
         .mockReturnValueOnce('jwt')     // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce(undefined) // REQUIRED_ROLE_KEY
         .mockReturnValueOnce(undefined); // REQUIRED_FEATURE_FLAG_KEY
       jwksService.verifyToken.mockResolvedValue(mockClaims as any);
 
@@ -954,7 +668,6 @@ describe('BridgeAuthGuard', () => {
       reflector.getAllAndOverride
         .mockReturnValueOnce(undefined) // IS_PUBLIC_KEY
         .mockReturnValueOnce('jwt')     // ACCEPT_AUTH_KEY
-        .mockReturnValueOnce(undefined) // REQUIRED_ROLE_KEY
         .mockReturnValueOnce(undefined); // REQUIRED_FEATURE_FLAG_KEY
       jwksService.verifyToken.mockResolvedValue(mockClaims as any);
 

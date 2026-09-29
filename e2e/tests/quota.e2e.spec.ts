@@ -4,7 +4,7 @@
  * The demo TicketsController carries:
  *   POST   /tickets             @RequireQuota('tickets', { current })   — gauge
  *   DELETE /tickets/:id         @SyncQuota('tickets', { current })
- *   POST   /tickets/:id/export  @RequireEntitlement('app_active') @RequireQuota('exports') — counter
+ *   POST   /tickets/:id/export  @RequireQuota('exports') — counter
  *
  * Every request is a direct HTTP call with a real user token, i.e. exactly
  * what a caller bypassing the UI sends. What the plugin wrote to Bridge is read

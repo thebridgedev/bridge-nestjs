@@ -44,11 +44,9 @@ export {
  * @RequireQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
  * create() {}
  *
- * // A plan feature and a limit are different keys: every hard quota is also
- * // an entitlement of its own name, which is false at the cap, so
- * // @RequireEntitlement('exports') here would answer 403 before the 402.
+ * // Who may export is a flag; how many is the quota.
  * @Post(':id/export')
- * @RequireEntitlement('app_active')
+ * @RequireFeatureFlag('exports-enabled')
  * @RequireQuota('exports')
  * export() {}
  * ```
@@ -89,6 +87,12 @@ export function SyncQuota<C = any>(metric: string, opts: SyncQuotaOptions<C>): M
  * Refuse the request with 403 `ENTITLEMENT_REQUIRED` unless the tenant's
  * plan includes `key`. Checked before `@RequireQuota`, on a user verified by
  * `BridgeAuthGuard`. Works on a handler or a whole controller.
+ *
+ * Exception, not the standard (TBP-705): this reads the plan directly. The
+ * standard is `@RequireFeatureFlag('<key>')` with the flag ruled on
+ * `bridge:billing.entitlement.<key> eq true`; use this only when the
+ * developer explicitly asks for no flag. Outside production it logs a
+ * one-time note the first time a handler with it runs.
  */
 export function RequireEntitlement(key: string): MethodDecorator & ClassDecorator {
   if (typeof key !== 'string' || key.length === 0) {

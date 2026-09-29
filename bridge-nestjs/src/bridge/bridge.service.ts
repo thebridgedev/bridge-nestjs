@@ -183,8 +183,8 @@ export class BridgeService {
    * TBP-644 — a NEWER token for the same user drops that user's cached
    * snapshot.
    *
-   * The snapshot answers plan and entitlement gates (`plans:` /
-   * `entitlement:` route rules). Keyed on `tid:sub` alone, a user who upgraded
+   * The snapshot answers plan and entitlement reads (flag rules on
+   * `bridge:billing.*`, `@RequireEntitlement`, quotas). Keyed on `tid:sub` alone, a user who upgraded
    * kept getting 402 for the full TTL even with a token issued after the
    * upgrade — measured on stage: 30.3 s, while /session/init already said
    * `pro` after 0.2 s. Bridge re-issues a user's token precisely when their

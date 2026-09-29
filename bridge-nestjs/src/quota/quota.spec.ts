@@ -20,7 +20,7 @@ jest.mock('jose', () => ({
   },
 }));
 
-import { Controller, Delete, ExecutionContext, HttpException, Post } from '@nestjs/common';
+import { Controller, Delete, ExecutionContext, HttpException, Logger, Post } from '@nestjs/common';
 import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
 import { Test, TestingModule } from '@nestjs/testing';
 import { lastValueFrom, of, throwError } from 'rxjs';
@@ -29,7 +29,7 @@ import { BridgeModule, resolveBridgeConfig } from '../bridge.module';
 import { rememberVerifiedUserToken } from '../bridge/verified-request';
 import type { QuotaSnapshot } from '../bridge/tenant-scope';
 import { RequireEntitlement, RequireQuota, SyncQuota } from './quota.decorators';
-import { BridgeQuotaInterceptor } from './quota.interceptor';
+import { BridgeQuotaInterceptor, resetEntitlementNotes } from './quota.interceptor';
 import { BridgeQuotaService } from './quota.service';
 import type { BridgeModuleConfig } from '../types/config';
 
@@ -499,6 +499,56 @@ describe('@RequireEntitlement', () => {
     entitlements = {};
     const err = await refusal(run(ReportsController, 'run', verifiedRequest()));
     expect(err.getStatus()).toBe(403);
+  });
+});
+
+// TBP-705 — @RequireEntitlement is the documented exception to "every gate
+// is a flag"; outside production it says so once, naming the flag to use.
+describe('@RequireEntitlement development note', () => {
+  const prevEnv = process.env.NODE_ENV;
+  const expected =
+    `[bridge] @RequireEntitlement('exports') checks the plan directly. The standard is @RequireFeatureFlag with a rule on bridge:billing.entitlement.exports — see "npx @nebulr-group/bridge-cli check gates".`;
+  let warn: jest.SpyInstance;
+  beforeEach(() => {
+    resetEntitlementNotes();
+    warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    entitlements = { exports: true, reports: true };
+    quotas.exports = snap('exports', 0, 5);
+    quotas.reports = snap('reports', 0, 5);
+  });
+  afterEach(() => {
+    process.env.NODE_ENV = prevEnv;
+  });
+
+  it('logs once, the first time a handler with it is evaluated', async () => {
+    process.env.NODE_ENV = 'development';
+    await run(TicketsController, 'export', verifiedRequest());
+    await run(TicketsController, 'export', verifiedRequest());
+    const notes = warn.mock.calls.filter(([m]) => String(m).includes('@RequireEntitlement('));
+    expect(notes).toEqual([[expected]]);
+  });
+
+  it('notes each key once (a controller-level one too)', async () => {
+    process.env.NODE_ENV = 'test';
+    await run(TicketsController, 'export', verifiedRequest());
+    await run(ReportsController, 'run', verifiedRequest());
+    await run(ReportsController, 'run', verifiedRequest());
+    const notes = warn.mock.calls.map(([m]) => String(m)).filter((m) => m.includes('@RequireEntitlement('));
+    expect(notes).toHaveLength(2);
+    expect(notes[1]).toContain("@RequireEntitlement('reports')");
+  });
+
+  it('is silent in production', async () => {
+    process.env.NODE_ENV = 'production';
+    await run(TicketsController, 'export', verifiedRequest());
+    expect(warn.mock.calls.filter(([m]) => String(m).includes('@RequireEntitlement('))).toEqual([]);
+  });
+
+  it('is not logged for handlers without it', async () => {
+    process.env.NODE_ENV = 'development';
+    quotas.tickets = snap('tickets', 1, 5, { kind: 'gauge' });
+    await run(TicketsController, 'create', verifiedRequest());
+    expect(warn.mock.calls.filter(([m]) => String(m).includes('@RequireEntitlement('))).toEqual([]);
   });
 });
 

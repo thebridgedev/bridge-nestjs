@@ -3,10 +3,12 @@ import { SetMetadata } from '@nestjs/common';
 export const REQUIRED_PRIVILEGE_KEY = 'bridge:requiredPrivilege';
 
 /**
- * Decorator to require a specific API token privilege for a route or controller.
- * Enforced by BridgeAuthGuard when an API token (x-api-key) is used.
+ * API tokens only: the scope an API token (x-api-key) must carry to call this
+ * route or controller. Enforced by BridgeAuthGuard for machine callers.
  *
- * User JWTs (Authorization: Bearer) bypass this check for backward compatibility.
+ * It is not a gate on a person. A signed-in user (Authorization: Bearer) is
+ * not checked against it; gate people with `@RequireFeatureFlag` and a flag
+ * rule on a privilege (`privileges contains "USER_READ"`).
  *
  * @param privilege - The required privilege key (e.g., 'USER_READ', 'TENANT_WRITE')
  *

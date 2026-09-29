@@ -54,7 +54,7 @@ describe('BridgeConfigService', () => {
   describe('findMatchingRule', () => {
     const rules = [
       { path: '/health', privilege: 'ANONYMOUS' },
-      { path: '/admin/*', privilege: 'TENANT_WRITE' },
+      { path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' },
       { path: '/items', privilege: 'AUTHENTICATED' },
     ];
     let svc: BridgeConfigService;
@@ -119,6 +119,68 @@ describe('BridgeConfigService', () => {
 
     it('should handle pattern without leading slash', () => {
       expect(svc.findMatchingRule('/no-leading-slash', 'GET')).not.toBeNull();
+    });
+  });
+
+  // TBP-705 — every gate is a flag. A rule that still gates on a role,
+  // privilege, plan or entitlement stops the app at startup and names the flag
+  // setup to use instead; silently ignoring it would open the route.
+  describe('route rules that gate some other way fail at startup (TBP-705)', () => {
+    const rulesOf = (...rules: Record<string, unknown>[]) => ({ guard: { rules } });
+
+    it('accepts ANONYMOUS / AUTHENTICATED rules with or without a featureFlag', () => {
+      expect(() =>
+        makeService(
+          rulesOf(
+            { path: '/health', privilege: 'ANONYMOUS' },
+            { path: '/items', privilege: 'AUTHENTICATED' },
+            { path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' },
+          ),
+        ),
+      ).not.toThrow();
+    });
+
+    it('a privilege key names the flag rule and @RequirePrivilege for API tokens', () => {
+      expect(() => makeService(rulesOf({ path: '/admin/*', privilege: 'TENANT_WRITE' }))).toThrow(
+        /guard\.rules\[0\] \(path '\/admin\/\*'\) has privilege: "TENANT_WRITE".*featureFlag: '<flag-key>'.*privileges contains "TENANT_WRITE".*@RequirePrivilege\("TENANT_WRITE"\) on the handler \(API tokens only\)/s,
+      );
+    });
+
+    it('`plans` names a flag on the plan feature', () => {
+      expect(() =>
+        makeService(rulesOf({ path: '/reports/*', privilege: 'AUTHENTICATED', plans: ['pro'] })),
+      ).toThrow(/uses `plans`, which was removed\. Use featureFlag: '<flag-key>'.*bridge:billing\.entitlement\.<key> eq true/s);
+    });
+
+    it('`entitlement` names the flag with the same key', () => {
+      expect(() =>
+        makeService(rulesOf({ path: '/export', privilege: 'AUTHENTICATED', entitlement: 'export' })),
+      ).toThrow(/uses `entitlement`, which was removed\. Use featureFlag: 'export'.*bridge:billing\.entitlement\.export eq true/s);
+    });
+
+    it('`role` is refused too', () => {
+      expect(() =>
+        makeService(rulesOf({ graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', role: 'ADMIN' })),
+      ).toThrow(/guard\.rules\[0\] \(graphqlOperation 'listUsers'\) uses `role`/);
+    });
+
+    it('lists every offending rule in one error, and points at the gate check', () => {
+      let message = '';
+      try {
+        makeService(
+          rulesOf(
+            { path: '/a', privilege: 'USER_READ' },
+            { path: '/ok', privilege: 'ANONYMOUS' },
+            { path: '/b', privilege: 'AUTHENTICATED', plans: ['pro'] },
+          ),
+        );
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toContain("guard.rules[0] (path '/a')");
+      expect(message).toContain("guard.rules[2] (path '/b')");
+      expect(message).not.toContain('rules[1]');
+      expect(message).toContain('npx @nebulr-group/bridge-cli check gates');
     });
   });
 

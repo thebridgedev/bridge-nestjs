@@ -18,24 +18,18 @@ import { TicketsService } from './tickets/tickets.service';
         global: true,
         defaultAccess: 'protected',
         rules: [
-          // Public routes. A RouteRule carries a `privilege`, and 'ANONYMOUS'
-          // is what the guard short-circuits on — there is no `public: true`
-          // rule form (that's the `@Public()` decorator, which /health also
-          // already uses). Only ANONYMOUS/privilege/plan rules belong in
-          // central guard config.
+          // Public routes. A rule's `privilege` is 'ANONYMOUS' or
+          // 'AUTHENTICATED' — whether the route needs a signed-in caller.
+          // (`@Public()` on a handler does the same; /health uses both.)
           { path: '/health', privilege: 'ANONYMOUS' },
           { path: '/api/public/*', privilege: 'ANONYMOUS' },
 
-          // /premium/* has no dedicated controller, so there is no central rule
-          // for it; gate premium endpoints with @RequireFeatureFlag(...) on
-          // their controller.
+          // Who gets a route is a flag, whose rule says why (a privilege, a
+          // plan feature, a rollout): `@RequireFeatureFlag` on the handler
+          // (admin.controller.ts, beta.controller.ts) or a rule's
+          // `featureFlag`, e.g.
+          //   { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' }
         ],
-        // Role gating is decorator-driven, not rule-driven: `@RequireRole` on
-        // the handler — see admin.controller.ts (@RequireRole('OWNER')). The
-        // `role:` rules that used to sit here were never a supported RouteRule
-        // shape. Feature flags can go either way: `@RequireFeatureFlag` on the
-        // handler (see beta.controller.ts) or, since TBP-472, a central rule's
-        // `featureFlag:` / `entitlement:` field.
       },
     }),
   ],
