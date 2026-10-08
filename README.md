@@ -1,6 +1,24 @@
-# Bridge NestJS
+<p align="center">
+  <a href="https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs"><img src="https://raw.githubusercontent.com/thebridgedev/bridge-nestjs/main/.github/assets/banner.png" alt="The Bridge for NestJS" width="100%"></a>
+</p>
 
-This workspace contains the Bridge NestJS plugin and a demo application.
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nebulr-group/bridge-nestjs"><img src="https://img.shields.io/npm/v/@nebulr-group/bridge-nestjs?color=20006b&label=npm" alt="npm version"></a>
+  <a href="https://github.com/thebridgedev/bridge-nestjs/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@nebulr-group/bridge-nestjs?color=20006b" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Website</b></a> ·
+  <a href="https://thebridge.dev/docs/quickstart/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Quickstart</b></a> ·
+  <a href="https://thebridge.dev/docs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Docs</b></a> ·
+  <a href="https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Set up with your AI assistant</b></a>
+</p>
+
+# The Bridge for NestJS
+
+`@nebulr-group/bridge-nestjs` protects a NestJS API with Bridge: token verification, flag-gated endpoints, plan limits and tenant data, as a module, a guard and decorators.
+
+**[The Bridge](https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)** is a hosted backend for SaaS apps. It gives you sign-in (passwords, magic links, passkeys, social login and SSO), multi-tenant workspaces with roles, Stripe subscriptions with plan limits, and feature flags, all managed from one dashboard. Your AI coding assistant can set it up for you through the [Bridge MCP server](https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs).
 
 ## The one rule for app code
 
@@ -85,4 +103,31 @@ npm run package
 
 ## Documentation
 
-See [bridge-nestjs/README.md](./bridge-nestjs/README.md) for full API documentation.
+See [bridge-nestjs/README.md](./bridge-nestjs/README.md) for the full API and [`learning/`](learning/README.md) for the guides.
+
+## Learn more
+
+- [Quickstart](https://thebridge.dev/docs/quickstart/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Authentication](https://thebridge.dev/docs/auth/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Feature flags](https://thebridge.dev/docs/feature-flags/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Plan limits](https://thebridge.dev/docs/plan-limits/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Tenant data](https://thebridge.dev/docs/bridge-service/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Multi-tenancy](https://thebridge.dev/docs/multi-tenancy/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Error handling](https://thebridge.dev/docs/error-handling/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Examples](https://thebridge.dev/docs/examples/nestjs/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs)
+
+## Other Bridge packages
+
+| Package | For |
+|---|---|
+| [`@nebulr-group/bridge-svelte`](https://www.npmjs.com/package/@nebulr-group/bridge-svelte) | SvelteKit |
+| [`@nebulr-group/bridge-react`](https://www.npmjs.com/package/@nebulr-group/bridge-react) | React |
+| [`@nebulr-group/bridge-nextjs`](https://www.npmjs.com/package/@nebulr-group/bridge-nextjs) | Next.js |
+| [`@nebulr-group/bridge-angular`](https://www.npmjs.com/package/@nebulr-group/bridge-angular) | Angular |
+| [`@nebulr-group/bridge-express`](https://www.npmjs.com/package/@nebulr-group/bridge-express) | Express |
+| [`@nebulr-group/bridge-cli`](https://www.npmjs.com/package/@nebulr-group/bridge-cli) | CLI for people and AI agents |
+| [`@nebulr-group/bridge-auth-core`](https://www.npmjs.com/package/@nebulr-group/bridge-auth-core) | Any JavaScript app (core) |
+
+## License
+
+[MIT](https://github.com/thebridgedev/bridge-nestjs/blob/main/LICENSE) © Nebulr. Built by [The Bridge](https://thebridge.dev/?utm_source=github&utm_medium=readme&utm_campaign=bridge-nestjs).
