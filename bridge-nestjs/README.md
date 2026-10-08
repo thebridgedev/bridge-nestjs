@@ -1,6 +1,26 @@
-# @nebulr-group/bridge-nestjs
+<p align="center">
+  <a href="https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/thebridgedev/bridge-nestjs/main/.github/assets/banner.png"><img src="https://raw.githubusercontent.com/thebridgedev/bridge-nestjs/main/.github/assets/banner-light.png" alt="The Bridge for NestJS" width="100%"></picture></a>
+</p>
 
-Bridge NestJS plugin for authentication, access control, feature flags, and tenant data (subscription, entitlements, branding).
+<p align="center">
+  <a href="https://www.npmjs.com/package/@nebulr-group/bridge-nestjs"><img src="https://img.shields.io/npm/v/@nebulr-group/bridge-nestjs?color=20006b&label=npm" alt="npm version"></a>
+  <a href="https://github.com/thebridgedev/bridge-nestjs/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@nebulr-group/bridge-nestjs?color=20006b" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <a href="https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Website</b></a> ·
+  <a href="https://thebridge.dev/docs/quickstart/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Quickstart</b></a> ·
+  <a href="https://thebridge.dev/docs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Docs</b></a> ·
+  <a href="https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs"><b>Set up with your AI assistant</b></a>
+</p>
+
+# The Bridge for NestJS
+
+`@nebulr-group/bridge-nestjs` protects a NestJS API with Bridge: token verification, flag-gated endpoints, plan limits and tenant data, as a module, a guard and decorators.
+
+**[The Bridge](https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)** is a hosted backend for SaaS apps. It gives you sign-in (passwords, magic links, passkeys, social login and SSO), multi-tenant workspaces with roles, Stripe subscriptions with plan limits, and feature flags, all managed from one dashboard. Your AI coding assistant can set it up for you through the [Bridge MCP server](https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs).
+
+> **Let your AI assistant set it up.** Connect the [Bridge MCP server](https://thebridge.dev/docs/ai-assistants/mcp/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs) to Claude, Cursor, Copilot or Gemini CLI and ask it to add Bridge to your app. Not using MCP? Run `npx @nebulr-group/bridge-cli guide add-login` in your project: it detects your framework from `package.json` and prints the steps for your assistant to follow. `npx @nebulr-group/bridge-cli doctor` checks the result.
 
 Built on [`@nebulr-group/bridge-auth-core`](https://www.npmjs.com/package/@nebulr-group/bridge-auth-core) — all JWT and API-token verification is delegated to auth-core's framework-agnostic `JwksService`. This plugin adds the NestJS dependency-injection layer: a module, a guard, decorators, and the request-scoped `BridgeService`.
 
@@ -158,7 +178,7 @@ There are two ways to check flags — pick by whether you need live updates.
 **`@RequireFlag` / `@Flag`** — backed by the `BridgeFlags` client, which can subscribe to **live updates**;
 `@Flag` also injects a flag's value into a handler param. Use this when you want live updates or need to
 read a flag value (not just gate). See the
-[Feature Flags guide](../learning/feature-flags/feature-flags.md) for setup (`BridgeFlagsModule`,
+[Feature Flags guide](https://thebridge.dev/docs/feature-flags/nestjs/) for setup (`BridgeFlagsModule`,
 `BridgeFlagGuard`, `BridgeContextInterceptor`).
 
 ```typescript
@@ -181,7 +201,7 @@ attributes, plus the workspace's `bridge:billing.entitlement.<feature>` (read fr
 workspace) when `BridgeModule` is loaded. Client-sent values are never used. Prefer a privilege rule over a
 role rule, and for a feature a plan sells, list it on the plans (`bridge plan feature add <plan> <feature>`)
 and rule the flag `bridge:billing.entitlement.<feature> eq true`. See
-[Target by plan feature or privilege](../learning/feature-flags/targeting/by-plan-or-role.md).
+[Target by plan feature or privilege](https://thebridge.dev/docs/feature-flags/targeting/).
 
 **`@RequireFeatureFlag`** — evaluated on demand over the Bridge API by `FeatureFlagService` (with a
 5-minute in-memory cache). No live updates. Use it for simple route gating or occasional checks when you
@@ -532,19 +552,29 @@ export class ReportsService {
 
 In `'pull'` mode, push events don't exist — for server-side reactions, use Bridge webhooks instead.
 
-## Documentation
+## Learn more
 
-In-depth guides live in [`../learning`](../learning):
+- [Quickstart](https://thebridge.dev/docs/quickstart/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Authentication](https://thebridge.dev/docs/auth/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Feature flags](https://thebridge.dev/docs/feature-flags/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Plan limits](https://thebridge.dev/docs/plan-limits/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Tenant data](https://thebridge.dev/docs/bridge-service/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Multi-tenancy](https://thebridge.dev/docs/multi-tenancy/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Error handling](https://thebridge.dev/docs/error-handling/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
+- [Examples](https://thebridge.dev/docs/examples/nestjs/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs)
 
-- [Quickstart](../learning/quickstart/quickstart.md)
-- [Authentication & Access Control](../learning/auth/auth.md)
-- [Configuration](../learning/configuration/configuration.md)
-- [Feature Flags](../learning/feature-flags/feature-flags.md)
-- [Tenant Data — `BridgeService`](../learning/bridge-service/bridge-service.md)
-- [Multi-Tenancy](../learning/multi-tenancy/multi-tenancy.md)
-- [Frontend Integration](../learning/frontend-integration/frontend-integration.md)
-- [Error Handling](../learning/error-handling/error-handling.md)
+## Other Bridge packages
+
+| Package | For |
+|---|---|
+| [`@nebulr-group/bridge-svelte`](https://www.npmjs.com/package/@nebulr-group/bridge-svelte) | SvelteKit |
+| [`@nebulr-group/bridge-react`](https://www.npmjs.com/package/@nebulr-group/bridge-react) | React |
+| [`@nebulr-group/bridge-nextjs`](https://www.npmjs.com/package/@nebulr-group/bridge-nextjs) | Next.js |
+| [`@nebulr-group/bridge-angular`](https://www.npmjs.com/package/@nebulr-group/bridge-angular) | Angular |
+| [`@nebulr-group/bridge-express`](https://www.npmjs.com/package/@nebulr-group/bridge-express) | Express |
+| [`@nebulr-group/bridge-cli`](https://www.npmjs.com/package/@nebulr-group/bridge-cli) | CLI for people and AI agents |
+| [`@nebulr-group/bridge-auth-core`](https://www.npmjs.com/package/@nebulr-group/bridge-auth-core) | Any JavaScript app (core) |
 
 ## License
 
-MIT
+[MIT](https://github.com/thebridgedev/bridge-nestjs/blob/main/LICENSE) © Nebulr. Built by [The Bridge](https://thebridge.dev/?utm_source=npm&utm_medium=readme&utm_campaign=bridge-nestjs).

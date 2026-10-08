@@ -1,7 +1,7 @@
 {
   "name": "@nebulr-group/bridge-nestjs",
   "version": "0.8.0",
-  "description": "Bridge NestJS plugin for authentication, feature flags and plan limits",
+  "description": "The Bridge for NestJS: token verification, flag-gated endpoints, plan limits and tenant data as a module, a guard and decorators.",
   "author": "Nebulr Group",
   "license": "MIT",
   "main": "dist/index.js",
@@ -60,18 +60,32 @@
   },
   "keywords": [
     "nestjs",
-    "bridge",
-    "nebulr",
-    "auth",
-    "authentication",
+    "nest",
+    "guard",
+    "decorators",
     "jwt",
+    "api-tokens",
+    "the-bridge",
+    "bridge",
+    "authentication",
+    "auth",
+    "login",
+    "sso",
     "feature-flags",
+    "stripe",
+    "subscriptions",
+    "billing",
+    "plan-limits",
+    "multi-tenant",
     "rbac",
-    "guard"
+    "saas"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/thebridgedev/bridge-nestjs"
   },
-  "homepage": "https://thebridge.dev"
+  "homepage": "https://thebridge.dev/docs/quickstart/nestjs/",
+  "bugs": {
+    "url": "https://github.com/thebridgedev/bridge-nestjs/issues"
+  }
 }
