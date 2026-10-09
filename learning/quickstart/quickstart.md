@@ -161,7 +161,7 @@ export class ApiUsersController {
 }
 ```
 
-For full API token documentation, see the [examples documentation](../examples/examples.md#api-token-authentication).
+For full API token documentation, see [API token authentication](../auth/auth.md#api-token-authentication).
 
 ## Next steps
 
