@@ -22,7 +22,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Build and pack package
         run: |
@@ -54,8 +54,16 @@ jobs:
             const pkg = require('@nebulr-group/bridge-nestjs');
             if (!pkg.BridgeModule) throw new Error('BridgeModule not exported');
             if (!pkg.BridgeAuthGuard) throw new Error('BridgeAuthGuard not exported');
-            if (!pkg.BridgeHttpService) throw new Error('BridgeHttpService not exported');
-            if (!pkg.BridgeHttpError) throw new Error('BridgeHttpError not exported');
+            const expected = [
+              'BridgeModule', 'BridgeAuthGuard', 'BridgeService', 'BridgeManagementService',
+              'BridgeWebhookGuard', 'BridgeMeterInterceptor', 'createBridgeServer', 'BridgeError',
+              'isBridgeError', 'FlagSet', 'Public', 'CurrentActor', 'RequireFlag', 'Meter', 'Strict',
+            ];
+            const missing = expected.filter((name) => pkg[name] === undefined);
+            if (missing.length) throw new Error('not exported: ' + missing.join(', '));
+            for (const gone of ['BridgeHttpService', 'BridgeHttpError']) {
+              if (pkg[gone] !== undefined) throw new Error(gone + ' is a 0.x export and should be gone');
+            }
             console.log('All exports OK for NestJS ${{ matrix.nest-version }}');
           "
 
