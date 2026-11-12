@@ -9,6 +9,7 @@ export {
   type FlagFields,
   type FlagRead,
   type FlagSchedule,
+  type FlagUpdate,
   type ManagementOptions,
   type ManagementRequest,
   type Revision,

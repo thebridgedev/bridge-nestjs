@@ -13,7 +13,7 @@ export class Rollouts {
   async startRollout() {
     const { flags } = this.management;
     await flags.create({ key: 'new-checkout', description: 'The new checkout', state: 'off', valueType: 'boolean', onValue: true, offValue: false });
-    await flags.update('new-checkout', { state: 'on' });
+    await flags.update('new-checkout', { state: 'on' }, { ifMatch: (await flags.getWithETag('new-checkout')).etag });
   }
 }
 ```
@@ -28,7 +28,7 @@ The key needs `flags.flags:read` to read, `flags.flags:write` to make, change, k
 | `flags.get(key, { fields? })` | One flag |
 | `flags.getWithETag(key)` | One flag and its ETag, for a change that names the revision it was made on |
 | `flags.create({ key, ... })` | Makes a flag. A key that exists is refused with `kind: 'conflict'` |
-| `flags.update(key, patch, { ifMatch? })` | Changes the fields you give. `rule: null` clears the rule |
+| `flags.update(key, patch, { ifMatch })` | Changes the fields you give. `rule: null` clears the rule. `ifMatch` is required |
 | `flags.delete(key, { ifMatch? })` | Deletes a flag |
 | `flags.kill(key)` / `flags.restore(key)` | Switches a flag off, keeping its rule, and back to the state it had. Needs no revision |
 | `flags.schedules.list({ flag? })` | The waiting and past scheduled changes, of one flag or all |
@@ -60,7 +60,13 @@ try {
 
 `ifMatch` takes the ETag a read gave, or the flag's `revision` as a number. The client sends it as `If-Match`. When the flag has changed since, Bridge refuses the change and the client throws a `BridgeConflictError`, which is a `BridgeError` with `kind: 'conflict'`. Its `ifMatch` says which revision your change was made on.
 
-`update`, `delete` and `schedules.create` take `ifMatch`. Bridge asks every change to a flag to name a revision, so without `ifMatch` `update` reads the flag's current revision first and changes that: the change wins over anything made in between. Pass `ifMatch` whenever the change depends on what you read. `delete` and `schedules.create` do not need one.
+`update` requires `ifMatch`, because Bridge refuses a change to a flag that names no revision: that is what stops one change from silently overwriting another. `delete` and `schedules.create` take `ifMatch` too, and do not need one.
+
+When the change should win whatever happened in between, read the current revision just before and name it:
+
+```typescript
+await flags.update('new-checkout', { state: 'on' }, { ifMatch: (await flags.getWithETag('new-checkout')).etag });
+```
 
 A `BridgeConflictError` is only a stale revision. A key that is already taken, on `create`, is a plain `BridgeError` of the same kind, since there is no revision to read again.
 

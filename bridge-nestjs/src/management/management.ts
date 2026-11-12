@@ -283,7 +283,13 @@ export interface FlagRead {
   readonly fields?: readonly string[];
 }
 
-/** For a change to a flag that exists. */
+/** A change to a flag that must name the revision it was made on. */
+export interface FlagUpdate {
+  /** The revision the change is made on: `flags.getWithETag(key).etag`, or a flag's `revision`. The change is refused (`BridgeConflictError`) when the flag has changed since. */
+  readonly ifMatch: Revision;
+}
+
+/** For a change to a flag that exists, where naming the revision is optional. */
 export interface FlagChange {
   /** The revision the change is made on: `flags.getWithETag(key).etag`, or a flag's `revision`. The change is refused (`BridgeConflictError`) when the flag has changed since. */
   readonly ifMatch?: Revision;
@@ -309,14 +315,14 @@ function flagsApi(caller: Caller) {
     /** Makes a flag. A key that exists is refused (`conflict`). */
     create: (flag: FlagFields & { key: string }) => caller.call<ManagedFlag>('POST', 'flags', '/flags', { body: flag }),
     /**
-     * Changes the fields you give. A change to a flag names the revision it was made on, so nobody overwrites what they
-     * did not see: pass `ifMatch` to name the one you read; without it the client reads the flag's current revision first
-     * and changes that, so the change wins over anything made in between. Refused with a `BridgeConflictError` when the
-     * flag has changed since the revision you named.
+     * Changes the fields you give. A change to a flag names the revision it was made on (`ifMatch`), so nobody
+     * overwrites what they did not see. Refused with a `BridgeConflictError` when the flag has changed since. For a
+     * change that should win whatever happened in between, name the current revision: `{ ifMatch: (await flags.getWithETag(key)).etag }`.
      */
-    update: async (key: string, patch: FlagFields & { key?: string }, change?: FlagChange): Promise<ManagedFlag> => {
-      const ifMatch = change?.ifMatch ?? (await read(at(key), { fields: 'key' })).headers.get('etag') ?? undefined;
-      return caller.call<ManagedFlag>('PATCH', 'flags', at(key), { body: patch, ...(ifMatch === undefined ? {} : { ifMatch }) });
+    update: (key: string, patch: FlagFields & { key?: string }, change: FlagUpdate): Promise<ManagedFlag> => {
+      // A caller without types can still leave it out.
+      if ((change as { ifMatch?: Revision } | undefined)?.ifMatch === undefined) return Promise.reject(new BridgeError('invalid', 'A change to a flag names the revision it was made on: pass "ifMatch".'));
+      return caller.call<ManagedFlag>('PATCH', 'flags', at(key), { body: patch, ifMatch: change.ifMatch });
     },
     /** Deletes a flag. With `ifMatch`, only if it is still at that revision. */
     delete: (key: string, change?: FlagChange) => caller.call<{ deleted: boolean }>('DELETE', 'flags', at(key), { ...(change?.ifMatch === undefined ? {} : { ifMatch: change.ifMatch }) }),

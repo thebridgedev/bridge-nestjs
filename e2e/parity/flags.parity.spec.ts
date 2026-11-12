@@ -48,8 +48,10 @@ describeParity('management client: flags', (env) => {
     expect(stale).toMatchObject({ kind: 'conflict', ifMatch: first.etag });
     expect([409, 412]).toContain((stale as BridgeConflictError).status);
     expect((await flags.get(key)).description).toBe('Parity suite, changed');
-    // Without one, the client reads the current revision itself.
-    expect(await flags.update(key, { state: 'on' })).toMatchObject({ key, state: 'on' });
+    // A change that should win names the current revision, read just before.
+    expect(await flags.update(key, { state: 'on' }, { ifMatch: (await flags.getWithETag(key)).etag })).toMatchObject({ key, state: 'on' });
+    // One that names none is not sent.
+    await expect((flags.update as (...args: unknown[]) => Promise<unknown>)(key, { state: 'off' })).rejects.toMatchObject({ kind: 'invalid' });
   });
 
   it('kills a flag and restores it', async () => {
@@ -80,7 +82,7 @@ describeParity('management client: flags', (env) => {
 
   it('deletes a flag on the revision named, and refuses a stale one', async () => {
     const first = await flags.getWithETag(imported);
-    await flags.update(imported, { description: 'Changed once more' });
+    await flags.update(imported, { description: 'Changed once more' }, { ifMatch: first.etag });
     await expect(flags.delete(imported, { ifMatch: first.etag })).rejects.toBeInstanceOf(BridgeConflictError);
     expect(await flags.delete(imported, { ifMatch: (await flags.getWithETag(imported)).etag })).toEqual({ deleted: true });
     await expect(flags.get(imported)).rejects.toMatchObject({ kind: 'not-found' });

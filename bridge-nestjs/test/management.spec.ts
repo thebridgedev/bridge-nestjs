@@ -184,14 +184,20 @@ describe('management client', () => {
       expect(calls).toHaveLength(5);
     });
 
-    it('reads the flag\'s revision first when an update names none', async () => {
-      const { calls, fetch } = script([200, { key: 'new-checkout' }, { etag: '"9"' }], [200, { ...flag, revision: 10 }]);
-      const updated = await createBridgeManagement({ server, appKey: 'k', fetch }).flags.update('new-checkout', { state: 'off' });
+    it('refuses an update that names no revision, without calling Bridge', async () => {
+      const { calls, fetch } = recorder();
+      const { flags } = createBridgeManagement({ server, appKey: 'k', fetch });
+      await expect((flags.update as (...args: unknown[]) => Promise<unknown>)('new-checkout', { state: 'off' })).rejects.toMatchObject({ kind: 'invalid' });
+      await expect((flags.update as (...args: unknown[]) => Promise<unknown>)('new-checkout', { state: 'off' }, {})).rejects.toMatchObject({ kind: 'invalid' });
+      expect(calls).toHaveLength(0);
+    });
+
+    it('changes a flag on whatever revision it is at now, when the caller reads the ETag itself', async () => {
+      const { calls, fetch } = script([200, flag, { etag: '"9"' }], [200, { ...flag, revision: 10 }]);
+      const { flags } = createBridgeManagement({ server, appKey: 'k', fetch });
+      const updated = await flags.update('new-checkout', { state: 'off' }, { ifMatch: (await flags.getWithETag('new-checkout')).etag });
       expect(updated).toMatchObject({ revision: 10 });
-      expect(calls.map((c) => `${c.method} ${c.url} ${c.headers['if-match'] ?? '-'}`)).toEqual([
-        'GET https://bridge.example.test/v2/flags/flags/new-checkout?fields=key -',
-        'PATCH https://bridge.example.test/v2/flags/flags/new-checkout "9"',
-      ]);
+      expect(calls.map((c) => `${c.method} ${c.headers['if-match'] ?? '-'}`)).toEqual(['GET -', 'PATCH "9"']);
     });
 
     it('throws a typed conflict error when the flag has changed since the revision named', async () => {
