@@ -13,6 +13,7 @@ It is skipped unless it is set up. Run it in a container, from the repository ro
 | `tokens.parity.spec.ts` | A real person's token is accepted; none, malformed, forged, a refresh token, another app's and an expired token are refused (the expired one waits out the 5 minutes; `PARITY_FAST=1` skips it) |
 | `flag-gate.parity.spec.ts` | A route gated by a flag: off refuses and names the flag; on, flipped with the app key, lets the person in within seconds; off again refuses |
 | `management.parity.spec.ts` | The management client with the app key (workspaces, members, invites, plans, the payer) and with a workspace key (its own workspace only; another refused) |
+| `flags.parity.spec.ts` | The management client's flags area with the app key: make, list and read a flag with its ETag; change it on the revision named and refuse a stale one with `BridgeConflictError`; kill, restore, schedule, export, import (dry run and for real) and delete |
 | `metering.parity.spec.ts` | What `@Meter` counts reaches Billing's usage for the caller's workspace |
 | `webhook.parity.spec.ts` | A delivery Bridge made is checked by `verifyWebhook` (signature byte for byte, timestamp), taken by the demo's route, and its replay arrives with the same event id and is handled once |
 | `revocation.parity.spec.ts` | A removed member's token is refused within seconds |
@@ -24,7 +25,7 @@ All from the environment, set by whoever runs it. A test app, its key and its se
 | Variable | What |
 |---|---|
 | `PARITY_ISSUER` | The test app's issuer |
-| `PARITY_APP_KEY` | The test app's own key. It needs the privileges to make people (`users.passwords:reset`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`), read and set the payer (`billing:read`, `billing:manage`) and set flags (`flags.flags:read`, `flags.flags:write`) |
+| `PARITY_APP_KEY` | The test app's own key. It needs the privileges to make people (`users.passwords:reset`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`), read and set the payer (`billing:read`, `billing:manage`) and set and delete flags (`flags.flags:read`, `flags.flags:write`, `FLAG_DELETE`) |
 | `PARITY_HARNESS` | Optional. The address of a small local helper for what only the app's developer does. Without it the specs that need it are skipped |
 | `PARITY_INBOX_DOMAIN` | Optional. A domain whose mail the run can read, for the invite |
 

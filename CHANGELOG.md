@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Flags in the management client.** `management.flags` lists, reads, makes, changes, deletes, kills, restores, schedules, exports and imports the app's flags with your app key.
+- **Change a flag on the revision you read.** `flags.getWithETag(key)` gives the flag and its ETag; `update`, `delete` and `schedules.create` take `ifMatch`, sent as `If-Match`. A change made on an out-of-date revision throws `BridgeConflictError` (a `BridgeError` of kind `conflict`). `management.request` takes `ifMatch` too.
+- **A missing revision is `invalid`.** Bridge's `428` (a change that must name the revision it is made on) is now `kind: 'invalid'`; it was `unavailable`.
+
 ## [1.0.0-alpha.1] - 2026-11-12
 
 The first alpha for the new Bridge. It checks tokens with the same verifier as `@nebulr-group/bridge-auth-core` 1.0 and works with the new Bridge only.

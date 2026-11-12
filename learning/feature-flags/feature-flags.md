@@ -65,6 +65,9 @@ change live.
 - [Per-request context](/feature-flags/using/backend/): how each request is
   evaluated for the verified caller, and why the `x-bridge-context` header a
   client sends is never trusted.
+- [Manage flags from your server](/feature-flags/using/manage-flags/): make,
+  change, kill, schedule, export and import flags with the management
+  client, and change a flag on the revision you read.
 
 ## Targeting
 
