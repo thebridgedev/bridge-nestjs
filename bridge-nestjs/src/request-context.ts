@@ -46,11 +46,32 @@ export function responseOf(context: ExecutionContext): { setHeader?: (name: stri
   return context.switchToHttp().getResponse();
 }
 
-/** The GraphQL operation's name, when the call is GraphQL. */
-export function graphqlOperationOf(context: ExecutionContext): string | null {
+/**
+ * The resolver a GraphQL call runs, as `Type.field` (`Query.catalog`,
+ * `Mutation.deleteNote`): names the server's schema defines. Never the
+ * operation's name, which the client chooses. Null for other transports.
+ */
+export function graphqlFieldOf(context: ExecutionContext): string | null {
   if (context.getType<string>() !== 'graphql') return null;
-  const info = context.getArgByIndex(3) as { operation?: { name?: { value?: string } }; fieldName?: string } | undefined;
-  return info?.operation?.name?.value ?? info?.fieldName ?? null;
+  const info = context.getArgByIndex(3) as { parentType?: { name?: unknown }; fieldName?: unknown } | undefined;
+  const type = info?.parentType?.name;
+  const field = info?.fieldName;
+  return typeof type === 'string' && typeof field === 'string' ? `${type}.${field}` : null;
+}
+
+/**
+ * The route the HTTP router resolved for this request, as it was declared
+ * (`/beta`, `/users/:id`, with any global prefix): Express's `request.route`,
+ * Fastify's `routeOptions.url`. Whatever case, slashes or escapes the client
+ * sent, it is the path of the handler that is about to run. Null when the
+ * adapter does not say.
+ */
+export function routePathOf(request: HttpRequestLike): string | null {
+  const shaped = request as { route?: { path?: unknown }; routeOptions?: { url?: unknown }; routerPath?: unknown };
+  if (typeof shaped.route?.path === 'string') return shaped.route.path;
+  if (typeof shaped.routeOptions?.url === 'string') return shaped.routeOptions.url;
+  if (typeof shaped.routerPath === 'string') return shaped.routerPath;
+  return null;
 }
 
 /** The path, without its query. */

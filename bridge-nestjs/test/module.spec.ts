@@ -76,6 +76,36 @@ describe('BridgeModule against a signing issuer', () => {
       expect((await get('/beta', token)).status).toBe(200);
     });
 
+    // The router ignores case and a trailing slash; a rule must not be skipped where the router still runs the handler.
+    const variants = ['/BETA', '/Beta', '/beta/', '/BETA/', '/%62eta', '/%62ETA', '//beta', '//beta/', '/beta//'];
+
+    it('keeps a rule\'s flag gate whatever case, slashes or escapes the URL uses', async () => {
+      for (const path of variants) {
+        const answer = await get(path, token);
+        expect({ path, status: answer.status }).toEqual({ path, status: answer.status === 404 ? 404 : 403 });
+      }
+      expect((await get('/BETA', token)).status).toBe(403);
+      expect((await get('/beta/', token)).status).toBe(403);
+      issuer.setFlags('user-alice', [{ key: 'beta', value: true }]);
+      expect((await get('/BETA', token)).status).toBe(200);
+    });
+
+    it('matches a rule on the declared route, so a parameter route is gated for any URL', async () => {
+      for (const path of ['/items/42', '/ITEMS/42', '/items/42/', '/Items/%34%32']) {
+        expect({ path, status: (await get(path, token)).status }).toEqual({ path, status: 403 });
+      }
+    });
+
+    it('keeps an AUTHENTICATED rule under defaultAccess public whatever the URL looks like', async () => {
+      await app.close();
+      app = await startApp(issuer, { guard: { global: true, defaultAccess: 'public', rules: [{ path: '/beta', privilege: 'AUTHENTICATED', featureFlag: 'beta' }] } });
+      for (const path of ['/beta', ...variants]) {
+        const status = (await get(path)).status;
+        expect({ path, status }).toEqual({ path, status: status === 404 ? 404 : 401 });
+      }
+      expect((await get('/BETA')).status).toBe(401);
+    });
+
     it('@AcceptAuth("jwt") refuses a call that brings only a key', async () => {
       const answer = await request(app.getHttpServer()).get('/people-only').set('x-api-key', 'some-key');
       expect(answer.status).toBe(401);
@@ -113,6 +143,20 @@ describe('BridgeModule against a signing issuer', () => {
       // A read, and a write marked @Strict(false), still pass within the normal lag.
       expect((await get('/me', token)).status).toBe(200);
       expect((await request(app.getHttpServer()).post('/relaxed').set('authorization', `Bearer ${token}`)).status).toBe(201);
+    });
+
+    it('answers 503 for reads too, never yes, once the list falls behind maxLagMs', async () => {
+      await app.close();
+      app = await startApp(issuer, { strictLagMs: 100, maxLagMs: 300 });
+      expect((await get('/me', token)).status).toBe(200);
+      issuer.setLanesDown(true);
+      await eventually(async () => {
+        const answer = await get('/me', token);
+        expect(answer.status).toBe(503);
+        expect(answer.headers['retry-after']).toBe('5');
+      });
+      expect((await get('/reports', token)).status).toBe(503);
+      expect((await get('/public')).body).toEqual({ actor: null });
     });
   });
 

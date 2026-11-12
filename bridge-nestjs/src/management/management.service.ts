@@ -22,6 +22,7 @@ export class BridgeManagementService {
         server,
         ...(options.appKey === undefined ? {} : { appKey: options.appKey }),
         ...(options.fetch === undefined ? {} : { fetch: options.fetch as typeof fetch }),
+        ...(options.managementTimeoutMs === undefined ? {} : { timeoutMs: options.managementTimeoutMs }),
       }),
     );
   }

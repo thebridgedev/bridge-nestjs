@@ -35,7 +35,12 @@ export interface ManagementOptions {
   /** The app's own key. Needed for every call except `forCaller`. */
   readonly appKey?: string;
   readonly fetch?: typeof fetch;
+  /** How long one call may take, answer included, before it fails with `network`. @default 10000 */
+  readonly timeoutMs?: number;
 }
+
+/** How long a management call may take by default. */
+export const MANAGEMENT_TIMEOUT_MS = 10_000;
 
 type Json = Record<string, unknown>;
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -105,18 +110,27 @@ class Caller {
     if (request.idempotencyKey !== undefined) headers['idempotency-key'] = request.idempotencyKey;
     if (request.body !== undefined) headers['content-type'] = 'application/json';
     const fetchFn = this.options.fetch ?? globalThis.fetch;
+    const timeoutMs = this.options.timeoutMs ?? MANAGEMENT_TIMEOUT_MS;
+    const signal = AbortSignal.timeout(timeoutMs);
+    const unreachable = (cause: unknown): BridgeError =>
+      signal.aborted
+        ? new BridgeError('network', `Bridge did not answer within ${timeoutMs} ms.`, { cause })
+        : new BridgeError('network', `Bridge could not be reached: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
     let response: Response;
+    let text: string;
     try {
       response = await fetchFn(url.href, {
         method,
         headers,
         redirect: 'manual',
+        signal,
         ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
       });
+      // The time limit covers the answer's body too: a stalled stream fails the same way.
+      text = await response.text();
     } catch (cause) {
-      throw new BridgeError('network', `Bridge could not be reached: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+      throw unreachable(cause);
     }
-    const text = await response.text();
     let body: unknown = null;
     if (text !== '') {
       try {

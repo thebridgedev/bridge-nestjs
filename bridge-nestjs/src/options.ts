@@ -11,11 +11,20 @@ export type RoutePrivilege = 'ANONYMOUS' | 'AUTHENTICATED';
  * decorator on the handler wins over a rule.
  */
 export interface RouteRule {
-  /** The path, with `*` for one segment and `**` for any number. Matched against the path without its query. */
+  /**
+   * An HTTP route, with `*` for one segment and `**` for any number. Matched,
+   * ignoring case and a trailing slash, against the route the router resolved
+   * as it was declared (`/users/:id`, with any global prefix), never against
+   * the URL the client sent: `/users/*` covers `@Get('users/:id')`.
+   */
   path?: string;
-  /** A GraphQL operation's name, for a GraphQL endpoint. */
-  graphqlOperation?: string;
-  /** Limit the rule to one HTTP method. */
+  /**
+   * A GraphQL resolver, as `Type.field` from your schema (`Query.catalog`,
+   * `Mutation.deleteNote`). Checked for each field the document asks for, so
+   * the operation's name, which the client chooses, never decides.
+   */
+  graphqlField?: string;
+  /** Limit a `path` rule to one HTTP method. */
   method?: string;
   /** `ANONYMOUS`: open to everyone. `AUTHENTICATED`: needs a valid credential. */
   privilege: RoutePrivilege;
@@ -71,6 +80,8 @@ export interface BridgeModuleOptions {
   usageFlushMs?: number;
   /** A `fetch` to use instead of the global one (tests, proxies). */
   fetch?: BridgeServerOptions['fetch'];
+  /** How long a management client call may take before it fails with `network`. @default 10000 */
+  managementTimeoutMs?: number;
 }
 
 export interface BridgeModuleAsyncOptions {

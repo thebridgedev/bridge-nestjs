@@ -100,6 +100,11 @@ class TestController {
     return { ok: true };
   }
 
+  @Get('items/:id')
+  ruleItem() {
+    return { ok: true };
+  }
+
   @BridgeWebhook()
   @Post('webhooks/bridge')
   webhook(@WebhookEvent() event: BridgeWebhookEvent) {
@@ -127,6 +132,7 @@ export async function startApp(issuer: SignedIssuer, overrides: Partial<BridgeMo
           rules: [
             { path: '/open/**', privilege: 'ANONYMOUS' },
             { path: '/beta', privilege: 'AUTHENTICATED', featureFlag: 'beta' },
+            { path: '/items/*', privilege: 'AUTHENTICATED', featureFlag: 'beta' },
           ],
         },
         ...overrides,

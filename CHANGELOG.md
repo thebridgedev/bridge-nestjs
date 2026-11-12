@@ -13,6 +13,7 @@ The first alpha for the new Bridge. It checks tokens with the same verifier as `
 - **`@Meter(metric)`.** Counts usage for the caller's workspace once the handler succeeds, in batches that are never counted twice.
 - **Management client.** `BridgeManagementService`: workspaces, members, invites, plans and each workspace's billing with your app key or a workspace key; the calling person's keys and their workspace's keys with their own token.
 - **Webhooks.** `@BridgeWebhook()` and `verifyWebhook()` check Bridge's webhook signature, with two secrets during a rotation's 24-hour overlap.
+- **Management calls time out.** A call Bridge does not answer within 10 seconds fails with `kind: 'network'`; set `managementTimeoutMs` (or `timeoutMs` for `createBridgeManagement`) to change it.
 
 ### Changed (breaking)
 
@@ -25,8 +26,10 @@ The first alpha for the new Bridge. It checks tokens with the same verifier as `
 - **`JwksService`, `FeatureFlagService`, `BridgeHttpService`, `BridgeConfigService`, `TenantScope` and `BridgeService.fromJwt()` are removed.** `BridgeService` checks and reads for the caller; `BridgeManagementService` calls Bridge's API.
 - **`RequireFlag` and `RequireFeatureFlag` are the same decorator**, from the main entry point.
 - **Node 20.19 or later.**
+- **GraphQL rules name the resolver, not the operation.** A rule's `graphqlOperation` is removed: the client chooses an operation's name, so a rule on it could be opened or skipped by renaming the operation. Use `graphqlField: 'Query.field'` (or `Mutation.…`), checked for each field the document asks for, or `@Public()` / `@RequireFlag()` on the resolver. The module refuses to start with a `graphqlOperation` rule.
+- **Path rules match the route, not the URL.** A rule's `path` is matched against the route the router picked, as you declared it, ignoring case and a trailing slash. A different case, a trailing or doubled slash or an escaped letter can no longer get a request past its rule. Write a rule for a parameter route as `/users/*` or `/users/:id`, not as a concrete URL.
 
-Unchanged: `BridgeModule.forRoot()` / `forRootAsync()`, `BridgeAuthGuard`, `guard.global`, `guard.defaultAccess`, route rules with `privilege` and `featureFlag`, `@Public()`, `@AcceptAuth()`, `@RequireFeatureFlag()`, `FeatureNotInPlanException`, `FeatureForbiddenException`, `featureRefusalBody`, `BRIDGE_DEFAULTS`.
+Unchanged: `BridgeModule.forRoot()` / `forRootAsync()`, `BridgeAuthGuard`, `guard.global`, `guard.defaultAccess`, route rules' `privilege` and `featureFlag`, `@Public()`, `@AcceptAuth()`, `@RequireFeatureFlag()`, `FeatureNotInPlanException`, `FeatureForbiddenException`, `featureRefusalBody`, `BRIDGE_DEFAULTS`.
 
 ## [0.8.0] - 2026-09-30
 

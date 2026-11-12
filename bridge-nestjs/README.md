@@ -95,9 +95,16 @@ guard: {
   rules: [
     { path: '/webhooks/**', privilege: 'ANONYMOUS' },
     { path: '/beta/**', privilege: 'AUTHENTICATED', featureFlag: 'beta' },
+    { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
+    { graphqlField: 'Query.catalog', privilege: 'ANONYMOUS' },
+    { graphqlField: 'Mutation.deleteNote', privilege: 'AUTHENTICATED', featureFlag: 'notes-delete' },
   ],
 }
 ```
+
+A `path` rule is matched against the route the router picked for the request, as you declared it (`/reports/:id`, with any global prefix), ignoring case and a trailing slash. The URL the client sent never decides, so `/BETA`, `/beta/` or `/%62eta` cannot get past a `/beta` rule. `*` is one segment and `**` any number, so `/reports/*` covers `@Get('reports/:id')`.
+
+A GraphQL call is matched by `graphqlField` rules only, on the resolver it runs: `Type.field` from your schema. Each field a document asks for is checked on its own, so the operation's name, which the client chooses, cannot open or skip a gate. `@Public()` and `@RequireFlag()` on a resolver work as on a controller.
 
 ## Count this
 
@@ -136,7 +143,7 @@ await caller.workspaceKeys.create({ name: 'CI', privileges: ['reports:read'] });
 
 A workspace key acts for its own workspace: `this.management.withKey(workspaceKey).workspace.members.list()`.
 
-A refusal throws a `BridgeError` with `kind` (`forbidden`, `not-found`, `conflict`, `rate-limited`, …), `status` and `code`. `management.request(method, area, path, options)` reaches a route the client has no method for yet.
+A refusal throws a `BridgeError` with `kind` (`forbidden`, `not-found`, `conflict`, `rate-limited`, …), `status` and `code`. A call Bridge does not answer within 10 seconds fails with `kind: 'network'`; `managementTimeoutMs` in the module's settings changes that. `management.request(method, area, path, options)` reaches a route the client has no method for yet.
 
 ## Webhooks
 
@@ -165,6 +172,8 @@ receive(@WebhookEvent() event: BridgeWebhookEvent) {
 | `@RequirePrivilege()`, `tokenPrivilege` in a rule | A flag whose rule names the privilege, with `@RequireFlag` |
 | `@RequireFeatureFlag(...)` | Unchanged; `@RequireFlag` is the same decorator |
 | `RouteRule.privilege`, `guard.global`, `guard.defaultAccess`, `@Public()`, `@AcceptAuth()` | Unchanged |
+| A rule's `graphqlOperation` | `graphqlField: 'Query.field'`, or a decorator on the resolver. The module refuses to start with `graphqlOperation` |
+| A rule's `path` matched against the URL | Matched against the declared route: write it as declared (`/users/*` or `/users/:id`), not as a concrete URL |
 | `@RequireQuota`, `@SyncQuota`, `BridgeQuotaService` | A flag rule for the limit with `@RequireFlag`, and `@Meter` to count |
 | `@RequireEntitlement` | A flag whose rule names the plan feature |
 | `FeatureForbiddenException` with `FEATURE_NOT_PERMITTED` | `FEATURE_OFF` (402 `FEATURE_NOT_IN_PLAN` is unchanged) |

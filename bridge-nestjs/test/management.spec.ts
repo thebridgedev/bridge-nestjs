@@ -75,4 +75,41 @@ describe('management client', () => {
     const { fetch } = recorder();
     await expect(createBridgeManagement({ server, fetch }).plans.list()).rejects.toMatchObject({ kind: 'misconfigured' });
   });
+  /** A Bridge that never answers until the call is aborted. */
+  const stalled = () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    const fetch = ((_url: string, init: RequestInit) => {
+      signals.push(init.signal ?? undefined);
+      return new Promise<Response>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(init.signal?.reason)));
+    }) as unknown as typeof globalThis.fetch;
+    return { signals, fetch };
+  };
+
+  it('gives up on a Bridge that does not answer within timeoutMs, as a network error', async () => {
+    const { signals, fetch } = stalled();
+    const started = Date.now();
+    await expect(createBridgeManagement({ server, appKey: 'k', fetch, timeoutMs: 100 }).plans.list()).rejects.toMatchObject({ kind: 'network', message: 'Bridge did not answer within 100 ms.' });
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  it('gives up on an answer whose body stalls', async () => {
+    const fetch = ((_url: string, init: RequestInit) => {
+      const body = new ReadableStream({ start: (controller) => init.signal?.addEventListener('abort', () => controller.error(init.signal?.reason)) });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    }) as unknown as typeof globalThis.fetch;
+    await expect(createBridgeManagement({ server, appKey: 'k', fetch, timeoutMs: 100 }).plans.list()).rejects.toMatchObject({ kind: 'network' });
+  });
+
+  it('times every call out by default, after 10 seconds', async () => {
+    const timeout = jest.spyOn(AbortSignal, 'timeout');
+    try {
+      const { calls, fetch } = recorder();
+      await createBridgeManagement({ server, appKey: 'k', fetch }).plans.list();
+      expect(calls).toHaveLength(1);
+      expect(timeout).toHaveBeenCalledWith(10_000);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
 });

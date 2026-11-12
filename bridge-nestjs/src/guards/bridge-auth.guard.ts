@@ -15,18 +15,60 @@ import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-flag.decorator'
 import { STRICT_KEY } from '../decorators/strict.decorator';
 import { featureRefusal, featureRefusalBody, unmetFlag } from '../flags/feature-refusal';
 import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions, type FeatureFlagRequirement, type RouteRule } from '../options';
-import { graphqlOperationOf, pathOf, requestOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
+import { graphqlFieldOf, pathOf, requestOf, routePathOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-/** A rule's path as a pattern: `*` is one segment, `**` any number. */
+/** A path as the router compares it: no repeated or trailing slash. */
+function tidy(path: string): string {
+  const collapsed = path.replace(/\/{2,}/g, '/');
+  return collapsed.length > 1 ? collapsed.replace(/\/+$/, '') : collapsed;
+}
+
+/**
+ * A rule's path as a pattern: `*` is one segment, `**` any number. Case is
+ * ignored and a trailing slash is optional, as in Express's default router.
+ */
 function pathPattern(path: string): RegExp {
-  const escaped = path
-    .replace(/\/+$/, '')
+  const escaped = tidy(path)
     .split('/')
     .map((segment) => (segment === '**' ? '.*' : segment === '*' ? '[^/]+' : segment.replace(/[.+?^${}()|[\]\\*]/g, '\\$&')))
     .join('/');
-  return new RegExp(`^${escaped}/?$`);
+  return new RegExp(`^${escaped}/?$`, 'i');
+}
+
+/**
+ * The path a rule is matched against: the route the router resolved, so the
+ * case, slashes or escapes the client sent cannot steer a request past its
+ * rule. Only when the adapter names no route, the URL as a router would read
+ * it: repeated slashes collapsed and each segment decoded.
+ */
+function rulePathOf(request: HttpRequestLike): string {
+  const route = routePathOf(request);
+  if (route !== null) return tidy(route);
+  return tidy(
+    pathOf(request)
+      .split('/')
+      .map((segment) => {
+        try {
+          return decodeURIComponent(segment);
+        } catch {
+          return segment;
+        }
+      })
+      .join('/'),
+  );
+}
+
+const GRAPHQL_FIELD = /^[_A-Za-z][_0-9A-Za-z]*\.[_A-Za-z][_0-9A-Za-z]*$/;
+
+function checkRule(rule: RouteRule): void {
+  if ('graphqlOperation' in rule) {
+    throw new Error('A route rule names `graphqlOperation`: the client chooses an operation\'s name, so it cannot gate. Use `graphqlField: \'Query.field\'`, or a decorator on the resolver.');
+  }
+  if (rule.graphqlField !== undefined && !GRAPHQL_FIELD.test(rule.graphqlField)) {
+    throw new Error(`A route rule's graphqlField "${rule.graphqlField}" is not \`Type.field\`, such as \`Query.catalog\`.`);
+  }
 }
 
 function header(request: HttpRequestLike, name: string): string | undefined {
@@ -54,20 +96,32 @@ export class BridgeAuthGuard implements CanActivate {
     @Inject(BRIDGE_SERVER) private readonly server: BridgeServer,
     @Inject(BRIDGE_OPTIONS) private readonly options: BridgeModuleOptions,
   ) {
-    this.rules = (options.guard?.rules ?? []).map((rule) => ({ rule, pattern: rule.path === undefined ? null : pathPattern(rule.path) }));
+    const rules = options.guard?.rules ?? [];
+    rules.forEach(checkRule);
+    this.rules = rules.map((rule) => ({ rule, pattern: rule.path === undefined ? null : pathPattern(rule.path) }));
   }
 
   private log(message: string, details?: Record<string, unknown>): void {
     if (this.options.debug) this.logger.debug(details === undefined ? message : `${message} ${JSON.stringify(details)}`);
   }
 
-  private findRule(request: HttpRequestLike, operation: string | null): RouteRule | undefined {
-    const path = pathOf(request);
+  /**
+   * The first rule for this call. A GraphQL call is matched on the resolver
+   * it runs (`Type.field`) and only by `graphqlField` rules; an HTTP call on
+   * its resolved route and only by `path` rules.
+   */
+  private findRule(context: ExecutionContext, request: HttpRequestLike): RouteRule | undefined {
+    if (context.getType<string>() === 'graphql') {
+      // A resolver that cannot be named matches no rule: its decorators and `defaultAccess` decide.
+      const field = graphqlFieldOf(context);
+      return field === null ? undefined : this.rules.find(({ rule }) => rule.graphqlField === field)?.rule;
+    }
+    const path = rulePathOf(request);
     const method = (request.method ?? '').toUpperCase();
     return this.rules.find(({ rule, pattern }) => {
+      if (pattern === null) return false;
       if (rule.method !== undefined && rule.method.toUpperCase() !== method) return false;
-      if (rule.graphqlOperation !== undefined) return operation !== null && rule.graphqlOperation === operation;
-      return pattern !== null && pattern.test(path);
+      return pattern.test(path);
     })?.rule;
   }
 
@@ -82,8 +136,7 @@ export class BridgeAuthGuard implements CanActivate {
       if (this.metadata<boolean>(IS_PUBLIC_KEY, context)) return true;
       throw new UnauthorizedException('This handler needs a credential, and its transport carries none.');
     }
-    const operation = graphqlOperationOf(context);
-    const rule = this.findRule(request, operation);
+    const rule = this.findRule(context, request);
     const open =
       this.metadata<boolean>(IS_PUBLIC_KEY, context) === true ||
       rule?.privilege === 'ANONYMOUS' ||
