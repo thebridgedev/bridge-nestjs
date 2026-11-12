@@ -9,7 +9,8 @@
     "test:install": "bash scripts/test-install.sh",
     "package": "cd bridge-nestjs && npm pack --pack-destination ../",
     "e2e:test": "bridge-nestjs/node_modules/.bin/tsc -p tsconfig.e2e.json && bridge-nestjs/node_modules/.bin/jest --config jest.e2e.config.js",
-    "check:docs-links": "node scripts/check-docs-links.mjs"
+    "check:docs-links": "node scripts/check-docs-links.mjs",
+    "e2e:parity": "bridge-nestjs/node_modules/.bin/tsc -p tsconfig.e2e.json && bridge-nestjs/node_modules/.bin/jest --config jest.parity.config.js"
   },
   "devDependencies": {}
 }
