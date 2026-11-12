@@ -134,20 +134,19 @@ async function setPassword(env: ParityEnv, email: string): Promise<string> {
 export const throwawayEmail = (what: string): string => `parity-${what}-${randomUUID().slice(0, 8)}@check.invalid`;
 
 /**
- * A token signed in within the first seconds of a new workspace or member is refused as "access to the workspace changed"
- * (a change Bridge makes right after making them lands after it): sign in once those seconds have passed.
+ * A token signed in within the first seconds of a new member is refused as "access to the workspace changed" (a change Bridge makes
+ * right after adding them lands after it): sign in once those seconds have passed. A new workspace needs no wait: its first token is
+ * good (bridge-server fixed that in c800eea, TBP-902).
  */
 const settle = (since: number): Promise<void> => sleep(Math.max(0, since + 5_000 - Date.now()));
 
 /** A new workspace with a new person as its Owner, signed in to it. */
 export async function newOwner(env: ParityEnv, what = 'owner'): Promise<Person> {
   const email = throwawayEmail(what);
-  const startedAt = Date.now();
   const created = expectStatus(await api(env, 'POST', '/accounts/workspaces', { key: env.appKey, body: { owner: { email }, name: `Parity ${what}` } }), 201).body;
   const workspaceId = String(created['id']);
   const owner = created['owner'] as { id: string; user: { id: string } };
   const password = await setPassword(env, email);
-  await settle(startedAt);
   const signed = await signInWithPassword(env, email, password, workspaceId);
   return { email, userId: owner.user.id, memberId: owner.id, workspaceId, ...signed, issuedAt: Date.now() };
 }
