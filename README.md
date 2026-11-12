@@ -44,53 +44,35 @@ bridge-nestjs/
 
 ## Development
 
-### Using Docker (recommended)
+Builds and tests run in a container:
 
 ```bash
-# Start the development container
-docker-compose up -d
-
-# Enter the container
-docker exec -it bridge-nestjs zsh
-
-# Inside container: install dependencies
-npm install
-
-# Build the library
-npm run build
-
-# Start the demo app
-npm run start:demo
+docker compose run --rm bridge-nestjs zsh
+# inside the container
+cd bridge-nestjs && npm install && cd ..
+npm run build        # the library
+npm test             # unit tests, against a signing issuer in memory
+npm run e2e:test     # the demo app end to end
 ```
 
-### Local Development
-
-```bash
-# Install dependencies
-npm install
-
-# Build the library
-npm run build
-
-# Start the demo app
-npm run start:demo
-```
+`npm run e2e:test` runs the demo against a signing issuer in memory: tokens signed as Bridge signs them, the four lanes of the revocation list, flags and usage. Point it at a real issuer too with `E2E_ISSUER` (your test app's issuer); add `E2E_ACCESS_TOKEN`, a person's token for that app, to check the signed-in path. Never commit either.
 
 ## Demo App
 
-The demo app runs on `http://localhost:3000` and demonstrates:
+`demo/` shows the whole surface:
 
-- Global guard with route rules
-- Public routes (`/health`)
-- Protected routes (`/items`)
-- Flag-gated admin area (`/admin/*`, `@RequireFeatureFlag('admin-area')` ruled on a privilege)
-- Feature flag gating (`/beta/*`)
-- Decorator usage for fine-grained control
+- a public health check that reports whether the revocation list is current (`/`);
+- the caller (`/me`);
+- flag-gated tickets, counted with `@Meter` (`/tickets`);
+- the team, read and managed as the caller with the management client (`/team/*`);
+- a webhook receiver (`/webhooks/bridge`).
 
 ### Environment Variables
 
 ```bash
-BRIDGE_APP_ID=your-app-id
+BRIDGE_ISSUER=https://…/identity-access/apps/<your app id>
+BRIDGE_APP_KEY=…              # "count this" and the management client
+BRIDGE_WEBHOOK_SECRETS=whsec_…
 BRIDGE_DEBUG=true
 ```
 

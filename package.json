@@ -1,40 +1,15 @@
 {
   "name": "bridge-nestjs-workspace",
-  "version": "0.1.0-beta.0",
+  "version": "1.0.0-alpha.1",
   "private": true,
   "description": "Bridge NestJS plugin workspace",
-  "workspaces": [
-    "bridge-nestjs",
-    "demo"
-  ],
   "scripts": {
-    "check:docs-links": "node scripts/check-docs-links.mjs",
-    "build": "npm run build --workspace=bridge-nestjs",
-    "build:demo": "npm run build --workspace=demo",
-    "start:demo": "npm run start:dev --workspace=demo",
-    "test": "npm run test --workspace=bridge-nestjs",
+    "build": "npm run build --prefix bridge-nestjs",
+    "test": "npm test --prefix bridge-nestjs",
     "test:install": "bash scripts/test-install.sh",
     "package": "cd bridge-nestjs && npm pack --pack-destination ../",
-    "e2e:setup": "ts-node --project tsconfig.e2e.json e2e/pre-setup.ts",
-    "e2e:test": "npm run build && jest --config jest.e2e.config.js"
+    "e2e:test": "bridge-nestjs/node_modules/.bin/tsc -p tsconfig.e2e.json && bridge-nestjs/node_modules/.bin/jest --config jest.e2e.config.js",
+    "check:docs-links": "node scripts/check-docs-links.mjs"
   },
-  "devDependencies": {
-    "@nebulr-group/bridge-nestjs": "workspace:*",
-    "@nestjs/common": "^11.0.0",
-    "@nestjs/core": "^11.0.0",
-    "@nestjs/platform-express": "^11.0.0",
-    "@nestjs/testing": "^11.0.0",
-    "@types/express": "^5.0.0",
-    "@types/jest": "^29.5.14",
-    "@types/node": "^22.10.7",
-    "@types/supertest": "^6.0.0",
-    "dotenv": "^16.0.0",
-    "jest": "^29.7.0",
-    "reflect-metadata": "^0.2.0",
-    "rxjs": "^7.8.0",
-    "supertest": "^7.0.0",
-    "ts-jest": "^29.4.12",
-    "ts-node": "^10.9.0",
-    "typescript": "^5.5.0"
-  }
+  "devDependencies": {}
 }

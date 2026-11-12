@@ -1,22 +1,40 @@
 {
   "compilerOptions": {
     "module": "commonjs",
-    "target": "ES2021",
-    "declaration": false,
-    "removeComments": true,
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "strict": true,
+    "esModuleInterop": true,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "sourceMap": true,
-    "baseUrl": ".",
     "skipLibCheck": true,
-    "strictNullChecks": true,
-    "noImplicitAny": true,
-    "forceConsistentCasingInFileNames": true
+    "isolatedModules": true,
+    "allowJs": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@nebulr-group/bridge-nestjs": [
+        "bridge-nestjs/src"
+      ],
+      "*": [
+        "bridge-nestjs/node_modules/*"
+      ]
+    },
+    "typeRoots": [
+      "bridge-nestjs/node_modules/@types"
+    ],
+    "types": [
+      "jest",
+      "node"
+    ]
   },
   "include": [
     "e2e/**/*",
-    "demo/src/**/*"
+    "demo/src/**/*",
+    "bridge-nestjs/src/**/*",
+    "bridge-nestjs/test/support/**/*"
   ]
 }

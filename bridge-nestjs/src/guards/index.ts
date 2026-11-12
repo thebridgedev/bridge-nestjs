@@ -1,2 +1,1 @@
-export * from './bridge-auth.guard';
-
+export { BridgeAuthGuard } from './bridge-auth.guard';

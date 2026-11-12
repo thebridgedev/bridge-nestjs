@@ -1,261 +1,92 @@
-import { DynamicModule, Global, Module, Provider } from '@nestjs/common';
+import { DynamicModule, Global, Logger, Module, Provider } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { BridgePullCache } from '@nebulr-group/bridge-auth-core';
+import { createBridgeServer, type BridgeServer } from '@nebulr-group/bridge-auth-core/server';
+import { BridgeService } from './bridge.service';
 import { BridgeAuthGuard } from './guards/bridge-auth.guard';
-import { BRIDGE_CONFIG, BridgeConfigService } from './services/bridge-config.service';
-import { FeatureFlagService } from './services/feature-flag.service';
-import { JwksService } from './services/jwks.service';
-import { BridgeHttpService } from './services/bridge-http.service';
-import { BridgeConfig, BridgeModuleAsyncOptions, BridgeModuleConfig } from './types/config';
-// TBP-704 — plan limits and entitlements as decorators.
-import { BridgeQuotaService } from './quota/quota.service';
-import { BridgeQuotaInterceptor } from './quota/quota.interceptor';
-// TBP-341 — unified backend bridge surface.
-import { BRIDGE_FLAG_ATTRIBUTE_SOURCE, BRIDGE_PULL_CACHE } from './flags/flags.tokens';
-import { BridgeService } from './bridge/bridge.service';
-import { BRIDGE_OPTIONS } from './bridge/bridge.tokens';
+import { BridgeManagementService } from './management/management.service';
+import { BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleAsyncOptions, type BridgeModuleOptions } from './options';
+import { BridgeMeterInterceptor } from './usage/meter';
+import { BridgeWebhookGuard } from './webhooks/webhook.guard';
+
+const EXPORTS = [BRIDGE_OPTIONS, BRIDGE_SERVER, BridgeService, BridgeAuthGuard, BridgeManagementService, BridgeMeterInterceptor, BridgeWebhookGuard];
 
 /**
- * Bridge module for NestJS applications.
- * 
- * Provides authentication, feature flags (every gate is a flag), plan limits
- * and API-token scopes.
- * 
- * @example
- * ```typescript
- * // Zero config: appId / apiBaseUrl / debug come from BRIDGE_APP_ID,
- * // BRIDGE_API_BASE_URL and BRIDGE_DEBUG.
- * @Module({ imports: [BridgeModule.forRoot()] })
- * export class AppModule {}
+ * Settings not given are read from the environment: `BRIDGE_ISSUER`,
+ * `BRIDGE_APP_KEY` and `BRIDGE_WEBHOOK_SECRETS` (comma-separated).
+ */
+export function resolveBridgeOptions(options: Partial<BridgeModuleOptions> = {}, env: Record<string, string | undefined> = process.env): BridgeModuleOptions {
+  const secrets = (env['BRIDGE_WEBHOOK_SECRETS'] ?? '').split(',').map((secret) => secret.trim()).filter(Boolean);
+  return {
+    ...options,
+    issuer: options.issuer || env['BRIDGE_ISSUER'] || '',
+    ...(options.appKey === undefined && env['BRIDGE_APP_KEY'] ? { appKey: env['BRIDGE_APP_KEY'] } : {}),
+    ...(options.webhookSecrets === undefined && secrets.length > 0 ? { webhookSecrets: secrets } : {}),
+  };
+}
+
+function serverFor(options: BridgeModuleOptions): BridgeServer {
+  if (typeof options.issuer !== 'string' || options.issuer === '') {
+    throw new Error('BridgeModule needs the issuer: pass `issuer`, or set BRIDGE_ISSUER. It is the app\'s issuer, as the browser SDK takes it.');
+  }
+  const logger = new Logger('Bridge');
+  return createBridgeServer({
+    issuer: options.issuer,
+    ...(options.appKey ? { appKey: options.appKey } : {}),
+    ...(options.audience ? { audience: options.audience } : {}),
+    ...(options.fetch ? { fetch: options.fetch } : {}),
+    ...(options.maxLagMs === undefined ? {} : { maxLagMs: options.maxLagMs }),
+    ...(options.strictLagMs === undefined ? {} : { strictLagMs: options.strictLagMs }),
+    ...(options.revocationIntervalMs === undefined ? {} : { revocationIntervalMs: options.revocationIntervalMs }),
+    ...(options.usageFlushMs === undefined ? {} : { usageFlushMs: options.usageFlushMs }),
+    log: (message, details) => (options.debug ? logger.debug(details === undefined ? message : `${message} ${JSON.stringify(details)}`) : undefined),
+  });
+}
+
+/**
+ * The Bridge in a NestJS app: token checks that follow the app's revocation
+ * list, flag gates, "count this", the management client and webhook checks.
  *
- * // Basic usage
- * @Module({
- *   imports: [
- *     BridgeModule.forRoot({
- *       appId: 'your-app-id',
- *     }),
- *   ],
- * })
- * export class AppModule {}
- * 
- * // With global guard and route rules. A rule says whether a route needs a
- * // signed-in caller; who gets it is a flag (`featureFlag`, or
- * // @RequireFeatureFlag on the handler) whose rule says why.
- * @Module({
- *   imports: [
- *     BridgeModule.forRoot({
- *       appId: 'your-app-id',
- *       guard: {
- *         global: true,
- *         defaultAccess: 'protected',
- *         rules: [
- *           { path: '/health', privilege: 'ANONYMOUS' },
- *           { path: '/account/users', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
- *           { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
- *         ],
- *       },
- *     }),
- *   ],
- * })
- * export class AppModule {}
- * 
- * // Async configuration
- * @Module({
- *   imports: [
- *     BridgeModule.forRootAsync({
- *       imports: [ConfigModule],
- *       inject: [ConfigService],
- *       useFactory: (config: ConfigService) => ({
- *         appId: config.get('BRIDGE_APP_ID'),
- *         debug: config.get('BRIDGE_DEBUG') === 'true',
- *       }),
- *     }),
- *   ],
- * })
- * export class AppModule {}
- * ```
+ * @example
+ *   BridgeModule.forRoot()        // BRIDGE_ISSUER, BRIDGE_APP_KEY, BRIDGE_WEBHOOK_SECRETS
+ *   BridgeModule.forRoot({
+ *     issuer: process.env.BRIDGE_ISSUER!,
+ *     appKey: process.env.BRIDGE_APP_KEY,
+ *     guard: { global: true },
+ *   })
  */
 @Global()
 @Module({})
 export class BridgeModule {
-  /**
-   * Configure the Bridge module with static configuration.
-   *
-   * TBP-704 — every field is optional. `appId`, `apiBaseUrl` and `debug`
-   * fall back to `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG`
-   * (`'true'` turns it on); a value passed here always wins. Throws when no
-   * app id is found either way, rather than starting up unable to verify a
-   * single token.
-   */
-  static forRoot(config: BridgeModuleConfig = {}): DynamicModule {
-    const providers = this.createProviders(resolveBridgeConfig(config));
-    
-    return {
-      module: BridgeModule,
-      providers,
-      exports: [
-        BridgeConfigService,
-        JwksService,
-        FeatureFlagService,
-        BridgeAuthGuard,
-        BridgeHttpService,
-        BridgeService,
-        BRIDGE_FLAG_ATTRIBUTE_SOURCE,
-        BRIDGE_PULL_CACHE,
-        BridgeQuotaService,
-        BridgeQuotaInterceptor,
-      ],
-    };
+  static forRoot(given: Partial<BridgeModuleOptions> = {}): DynamicModule {
+    const options = resolveBridgeOptions(given);
+    const providers: Provider[] = [
+      { provide: BRIDGE_OPTIONS, useValue: options },
+      { provide: BRIDGE_SERVER, useFactory: serverFor, inject: [BRIDGE_OPTIONS] },
+      ...this.common(),
+    ];
+    if (options.guard?.global) providers.push({ provide: APP_GUARD, useExisting: BridgeAuthGuard });
+    return { module: BridgeModule, providers, exports: EXPORTS };
   }
 
-  /**
-   * Configure the Bridge module with async configuration
-   */
-  static forRootAsync(options: BridgeModuleAsyncOptions): DynamicModule {
-    const providers = this.createAsyncProviders(options);
-
-    return {
-      module: BridgeModule,
-      imports: options.imports || [],
-      providers,
-      exports: [
-        BridgeConfigService,
-        JwksService,
-        FeatureFlagService,
-        BridgeAuthGuard,
-        BridgeHttpService,
-        BridgeService,
-        BRIDGE_FLAG_ATTRIBUTE_SOURCE,
-        BRIDGE_PULL_CACHE,
-        BridgeQuotaService,
-        BridgeQuotaInterceptor,
-      ],
-    };
-  }
-
-  /**
-   * Create providers for synchronous configuration
-   */
-  private static createProviders(config: BridgeConfig): Provider[] {
+  static forRootAsync(async: BridgeModuleAsyncOptions): DynamicModule {
     const providers: Provider[] = [
       {
-        provide: BRIDGE_CONFIG,
-        useValue: config,
-      },
-      BridgeConfigService,
-      JwksService,
-      FeatureFlagService,
-      BridgeAuthGuard,
-      BridgeHttpService,
-      // TBP-341 — unified backend bridge surface.
-      {
         provide: BRIDGE_OPTIONS,
-        useValue: {
-          apiBaseUrl: config.apiBaseUrl ?? 'https://api.thebridge.dev',
-          appId: config.appId,
-          ttlMs: 30_000,
-        },
+        useFactory: async (...args: unknown[]) => resolveBridgeOptions(await async.useFactory(...args)),
+        inject: async.inject ?? [],
       },
+      { provide: BRIDGE_SERVER, useFactory: serverFor, inject: [BRIDGE_OPTIONS] },
+      ...this.common(),
       {
-        provide: BRIDGE_PULL_CACHE,
-        useFactory: () => new BridgePullCache({ ttlMs: 30_000 }),
-      },
-      BridgeService,
-      // TBP-757 — flag rules see the workspace's plan and entitlements.
-      { provide: BRIDGE_FLAG_ATTRIBUTE_SOURCE, useExisting: BridgeService },
-      BridgeQuotaService,
-      BridgeQuotaInterceptor,
-    ];
-
-    // Add global guard if configured
-    if (config.guard?.global) {
-      providers.push({
         provide: APP_GUARD,
-        useExisting: BridgeAuthGuard,
-      });
-    }
-
-    return providers;
-  }
-
-  /**
-   * Create providers for asynchronous configuration
-   */
-  private static createAsyncProviders(options: BridgeModuleAsyncOptions): Provider[] {
-    const configProvider: Provider = {
-      provide: BRIDGE_CONFIG,
-      useFactory: options.useFactory,
-      inject: options.inject || [],
-    };
-
-    // We need a separate provider to conditionally register the global guard
-    // since we don't know the config until runtime
-    const globalGuardProvider: Provider = {
-      provide: APP_GUARD,
-      useFactory: (configService: BridgeConfigService, guard: BridgeAuthGuard) => {
-        if (configService.isGlobalGuard) {
-          return guard;
-        }
-        // Return a pass-through guard if not global
-        return { canActivate: () => true };
+        useFactory: (options: BridgeModuleOptions, guard: BridgeAuthGuard) => (options.guard?.global ? guard : { canActivate: () => true }),
+        inject: [BRIDGE_OPTIONS, BridgeAuthGuard],
       },
-      inject: [BridgeConfigService, BridgeAuthGuard],
-    };
-
-    // TBP-341 — unified backend bridge surface (async path).
-    const bridgeOptionsProvider: Provider = {
-      provide: BRIDGE_OPTIONS,
-      useFactory: (configService: BridgeConfigService) => ({
-        apiBaseUrl: configService.apiBaseUrl,
-        appId: configService.appId,
-        ttlMs: 30_000,
-      }),
-      inject: [BridgeConfigService],
-    };
-    const pullCacheProvider: Provider = {
-      provide: BRIDGE_PULL_CACHE,
-      useFactory: () => new BridgePullCache({ ttlMs: 30_000 }),
-    };
-
-    return [
-      configProvider,
-      BridgeConfigService,
-      JwksService,
-      FeatureFlagService,
-      BridgeAuthGuard,
-      BridgeHttpService,
-      globalGuardProvider,
-      bridgeOptionsProvider,
-      pullCacheProvider,
-      BridgeService,
-      // TBP-757 — flag rules see the workspace's plan and entitlements.
-      { provide: BRIDGE_FLAG_ATTRIBUTE_SOURCE, useExisting: BridgeService },
-      BridgeQuotaService,
-      BridgeQuotaInterceptor,
     ];
+    return { module: BridgeModule, imports: async.imports ?? [], providers, exports: EXPORTS };
   }
-}
 
-
-/**
- * TBP-704 — fill `appId` / `apiBaseUrl` / `debug` from the environment where
- * the caller left them out. Explicit values win, including an explicit
- * `debug: false` over `BRIDGE_DEBUG=true`.
- */
-export function resolveBridgeConfig(
-  config: BridgeModuleConfig = {},
-  env: NodeJS.ProcessEnv = process.env,
-): BridgeConfig {
-  const appId = config.appId || env.BRIDGE_APP_ID;
-  if (!appId) {
-    throw new Error(
-      '[bridge-nestjs] BridgeModule.forRoot() needs an app id: pass `appId` or set BRIDGE_APP_ID.',
-    );
+  private static common(): Provider[] {
+    return [BridgeService, BridgeAuthGuard, BridgeManagementService, BridgeMeterInterceptor, BridgeWebhookGuard];
   }
-  return {
-    ...config,
-    appId,
-    apiBaseUrl: config.apiBaseUrl || env.BRIDGE_API_BASE_URL || undefined,
-    debug: config.debug ?? env.BRIDGE_DEBUG === 'true',
-  };
 }

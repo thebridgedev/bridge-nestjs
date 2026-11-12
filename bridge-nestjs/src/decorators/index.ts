@@ -1,5 +1,6 @@
-export * from './current-user.decorator';
-export * from './current-tenant.decorator';
 export * from './public.decorator';
-export * from './require-feature-flag.decorator';
-
+export * from './accept-auth.decorator';
+export * from './strict.decorator';
+export * from './require-flag.decorator';
+export * from './current-actor.decorator';
+export * from './flag.decorator';

@@ -1,5 +1,7 @@
 # Bridge NestJS Documentation
 
+> These guides describe 0.x. For 1.0 (alpha), the [package README](../bridge-nestjs/README.md) is the guide, with a table of what changed.
+
 Documentation for The Bridge NestJS plugin: authentication, flag-gated access, API token support, feature flags, plan limits and multi-tenancy for NestJS applications.
 
 ## The one rule for app code

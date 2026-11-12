@@ -1,9 +1,13 @@
 // Boots a real Nest app with the Bridge guard: a @Public() route answers 200,
-// a protected one 401, both under a global prefix (TBP-760, TBP-540).
+// a protected one 401, both under a global prefix (TBP-760, TBP-540, TBP-935).
 require('reflect-metadata');
 const { Module, Controller, Get } = require('@nestjs/common');
 const { NestFactory } = require('@nestjs/core');
 const { BridgeModule, Public } = require('@nebulr-group/bridge-nestjs');
+
+// Nothing here needs the network: the issuer is only read when a token has to
+// be verified, and a request with no token is refused before that.
+const ISSUER = 'http://127.0.0.1:9/identity-access/apps/install-smoke';
 
 class AppController {
   health() { return { ok: true }; }
@@ -19,7 +23,7 @@ Controller()(AppController);
 
 class AppModule {}
 Module({
-  imports: [BridgeModule.forRoot({ appId: 'install-smoke', guard: { global: true, defaultAccess: 'protected' } })],
+  imports: [BridgeModule.forRoot({ issuer: ISSUER, guard: { global: true, defaultAccess: 'protected' } })],
   controllers: [AppController],
 })(AppModule);
 

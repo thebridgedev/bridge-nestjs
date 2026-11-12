@@ -1,89 +1,37 @@
-// Module
-export { BridgeModule } from './bridge.module';
-
-// Guards
-export { BridgeAuthGuard } from './guards/bridge-auth.guard';
-
-// Decorators
-export { CurrentUser } from './decorators/current-user.decorator';
-export { CurrentTenant } from './decorators/current-tenant.decorator';
-export { Public, IS_PUBLIC_KEY } from './decorators/public.decorator';
-export { RequireFeatureFlag, REQUIRED_FEATURE_FLAG_KEY } from './decorators/require-feature-flag.decorator';
-export { RequirePrivilege, REQUIRED_PRIVILEGE_KEY } from './decorators/require-privilege.decorator';
-export { AcceptAuth, ACCEPT_AUTH_KEY, type AuthType } from './decorators/accept-auth.decorator';
-
-// TBP-704 — plan limits and entitlements as decorators, and as plain service calls.
+// The module and its options.
+export { BridgeModule, resolveBridgeOptions } from './bridge.module';
 export {
-  RequireQuota,
-  SyncQuota,
-  RequireEntitlement,
-  REQUIRED_QUOTA_KEY,
-  SYNC_QUOTA_KEY,
-  REQUIRED_ENTITLEMENT_KEY,
-  BridgeQuotaInterceptor,
-  USAGE_COUNTED_HEADER,
-  BridgeQuotaService,
-  QuotaExceededException,
-  EntitlementRequiredException,
-  type QuotaTenant,
-  type QuotaCounter,
-  type RequireQuotaOptions,
-  type SyncQuotaOptions,
-  type QuotaExceededBody,
-  type EntitlementRequiredBody,
-  type QuotaCount,
-  type QuotaCheckOptions,
-  type QuotaDecision,
-  type QuotaRecordOptions,
-} from './quota';
-
-// Services
-export { BridgeConfigService, BRIDGE_CONFIG } from './services/bridge-config.service';
-export { JwksService, TokenVerificationError } from './services/jwks.service';
-export type { ApiTokenClaims } from './services/jwks.service';
-export { FeatureFlagService, type RequirementVerdict } from './services/feature-flag.service';
-// TBP-756 — why a flag-gated endpoint refused (402 FEATURE_NOT_IN_PLAN,
-// 403 FEATURE_NOT_PERMITTED, 403 FEATURE_OFF).
-export {
-  FeatureNotInPlanException,
-  FeatureForbiddenException,
-  featureRefusalBody,
-  type FeatureRefusalBody,
-  type FeatureRefusalCode,
-  type FeatureOffReason,
-} from './flags/feature-refusal';
-export { BridgeHttpService, BridgeHttpError } from './services/bridge-http.service';
-
-// TBP-341 — Unified backend bridge surface (`bridge.fromJwt(jwt)` → TenantScope).
-export {
-  BridgeService,
-  TenantScope,
   BRIDGE_OPTIONS,
+  BRIDGE_SERVER,
+  BRIDGE_DEFAULTS,
   type BridgeModuleOptions,
-  type BrandingSnapshot,
-  type QuotaSnapshot,
-  type SessionSnapshotData,
-  type SubscriptionSnapshot,
-  type TenantEntitlementsView,
-  type TenantUsageView,
-  type UserSnapshot,
-} from './bridge';
+  type BridgeModuleAsyncOptions,
+  type GuardConfig,
+  type RouteRule,
+  type RoutePrivilege,
+  type FeatureFlagRequirement,
+} from './options';
 
-// Types
-export type {
-  BridgeConfig,
-  BridgeModuleConfig,
-  BillingConfig,
-  BridgeModuleAsyncOptions,
-  GuardConfig,
-  RouteRule,
-  FeatureFlagRequirement,
-} from './types/config';
-export { BRIDGE_DEFAULTS } from './types/config';
+// Checking who calls.
+export { BridgeService } from './bridge.service';
+export { BridgeAuthGuard } from './guards/bridge-auth.guard';
+export { bridgeStateOf, type BridgeRequestState } from './request-context';
 
-export type { BridgeUser, JwtClaims } from './types/user';
-export { transformJwtToBridgeUser } from './types/user';
+// Decorators.
+export * from './decorators';
 
-export type { BridgeTenant } from './types/tenant';
-export { transformJwtToBridgeTenant } from './types/tenant';
+// Flag gates and why they refuse.
+export * from './flags';
 
+// "Count this".
+export * from './usage';
+
+// The management client.
+export * from './management';
+
+// Webhooks.
+export * from './webhooks';
+
+// From auth-core, so an app needs no direct dependency on it.
+export { BridgeError, isBridgeError, FlagSet, createBridgeServer } from '@nebulr-group/bridge-auth-core/server';
+export type { Actor, BridgeErrorKind, BridgeServer, FlagReason, FlagResult, Hint, VerifyOptions } from '@nebulr-group/bridge-auth-core/server';

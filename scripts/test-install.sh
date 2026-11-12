@@ -16,7 +16,7 @@ npm pack --pack-destination "$ROOT_DIR"
 TARBALL=$(ls "$ROOT_DIR"/nebulr-group-bridge-nestjs-*.tgz | sort -V | tail -1)
 echo "    Packed: $TARBALL"
 
-for NEST_VERSION in 10 11; do
+for NEST_VERSION in 10 11 12; do
   echo ""
   echo "==> Testing install with NestJS $NEST_VERSION..."
 
@@ -43,7 +43,8 @@ for NEST_VERSION in 10 11; do
     const pkg = require('@nebulr-group/bridge-nestjs');
     if (!pkg.BridgeModule) throw new Error('BridgeModule not exported');
     if (!pkg.BridgeAuthGuard) throw new Error('BridgeAuthGuard not exported');
-    if (!pkg.BridgeHttpService) throw new Error('BridgeHttpService not exported');
+    if (!pkg.BridgeManagementService) throw new Error('BridgeManagementService not exported');
+    if (!pkg.verifyWebhook) throw new Error('verifyWebhook not exported');
     console.log('    All exports OK for NestJS ${NEST_VERSION}');
   "
 
