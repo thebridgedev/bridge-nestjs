@@ -8,7 +8,7 @@ export interface BridgeManagementService extends BridgeManagement {}
 
 /**
  * The management client, injectable: `workspaces`, `workspace(id)` (its
- * members, invites and billing), `plans`, `roles`, `users`, and
+ * members, invites and billing), `flags`, `plans`, `roles`, `users`, and
  * `forCaller(request)` for the calling person's keys and workspace keys.
  * Uses the module's `appKey`.
  */
