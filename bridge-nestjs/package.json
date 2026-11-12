@@ -1,7 +1,7 @@
 {
   "name": "@nebulr-group/bridge-nestjs",
-  "version": "0.8.0",
-  "description": "The Bridge for NestJS: token verification, flag-gated endpoints, plan limits and tenant data as a module, a guard and decorators.",
+  "version": "1.0.0-alpha.1",
+  "description": "The Bridge for NestJS: access tokens checked against the app's revocation list, flag-gated endpoints, \"count this\", the management client and webhook checks, as a module, a guard and decorators.",
   "author": "Nebulr Group",
   "license": "MIT",
   "main": "dist/index.js",
@@ -11,18 +11,7 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./flags": {
-      "types": "./dist/flags/index.d.ts",
-      "default": "./dist/flags/index.js"
-    },
     "./package.json": "./package.json"
-  },
-  "typesVersions": {
-    "*": {
-      "flags": [
-        "dist/flags/index.d.ts"
-      ]
-    }
   },
   "files": [
     "dist",
@@ -30,14 +19,13 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.json",
     "prepublishOnly": "npm run build",
-    "test": "jest",
+    "test": "tsc -p tsconfig.spec.json && jest",
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
-    "@nebulr-group/bridge-auth-core": "^0.8.0",
-    "jose": "^5.2.0"
+    "@nebulr-group/bridge-auth-core": "1.0.0-alpha.8"
   },
   "peerDependencies": {
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
@@ -48,13 +36,17 @@
   "devDependencies": {
     "@nestjs/common": "^11.0.1",
     "@nestjs/core": "^11.0.1",
+    "@nestjs/platform-express": "^11.0.1",
     "@nestjs/testing": "^11.1.14",
     "@types/express": "^5.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.7",
+    "@types/supertest": "^6.0.0",
     "jest": "^29.7.0",
+    "jose": "^6.2.3",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
+    "supertest": "^7.0.0",
     "ts-jest": "^29.4.6",
     "typescript": "^5.7.3"
   },
@@ -64,21 +56,16 @@
     "guard",
     "decorators",
     "jwt",
-    "api-tokens",
     "the-bridge",
     "bridge",
     "authentication",
     "auth",
-    "login",
-    "sso",
     "feature-flags",
-    "stripe",
-    "subscriptions",
     "billing",
-    "plan-limits",
     "multi-tenant",
-    "rbac",
-    "saas"
+    "saas",
+    "webhooks",
+    "revocation"
   ],
   "repository": {
     "type": "git",
@@ -87,5 +74,11 @@
   "homepage": "https://thebridge.dev/docs/quickstart/nestjs/",
   "bugs": {
     "url": "https://github.com/thebridgedev/bridge-nestjs/issues"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "publishConfig": {
+    "tag": "alpha"
   }
 }

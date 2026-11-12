@@ -1,517 +1,168 @@
 import {
-  Injectable,
   CanActivate,
   ExecutionContext,
+  Inject,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
-  ForbiddenException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { Request, Response } from 'express';
-import { BridgeConfigService } from '../services/bridge-config.service';
-import { JwksService, TokenVerificationError, ApiTokenClaims } from '../services/jwks.service';
-import { FeatureFlagService } from '../services/feature-flag.service';
-import { rememberVerifiedUserToken } from '../bridge/verified-request';
+import { FlagSet, isBridgeError, type Actor, type BridgeServer, type RequestLike } from '@nebulr-group/bridge-auth-core/server';
+import { ACCEPT_AUTH_KEY, type AuthType } from '../decorators/accept-auth.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
-import { featureRefusal } from '../flags/feature-refusal';
-import type { RequirementVerdict } from '../services/feature-flag.service';
-import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-feature-flag.decorator';
-import { REQUIRED_PRIVILEGE_KEY } from '../decorators/require-privilege.decorator';
-import { ACCEPT_AUTH_KEY, AuthType } from '../decorators/accept-auth.decorator';
-import { transformJwtToBridgeUser, BridgeUser } from '../types/user';
-import { transformJwtToBridgeTenant, BridgeTenant } from '../types/tenant';
-import { FeatureFlagRequirement, RouteRule } from '../types/config';
+import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-flag.decorator';
+import { STRICT_KEY } from '../decorators/strict.decorator';
+import { featureRefusal, featureRefusalBody, unmetFlag } from '../flags/feature-refusal';
+import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions, type FeatureFlagRequirement, type RouteRule } from '../options';
+import { graphqlOperationOf, pathOf, requestOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
 
-// Extend Express Request type
-declare global {
-  namespace Express {
-    interface Request {
-      bridgeUser?: BridgeUser;
-      bridgeTenant?: BridgeTenant;
-      bridgeAccessToken?: string;
-      bridgeApiToken?: ApiTokenClaims;
-    }
-  }
+const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** A rule's path as a pattern: `*` is one segment, `**` any number. */
+function pathPattern(path: string): RegExp {
+  const escaped = path
+    .replace(/\/+$/, '')
+    .split('/')
+    .map((segment) => (segment === '**' ? '.*' : segment === '*' ? '[^/]+' : segment.replace(/[.+?^${}()|[\]\\*]/g, '\\$&')))
+    .join('/');
+  return new RegExp(`^${escaped}/?$`);
+}
+
+function header(request: HttpRequestLike, name: string): string | undefined {
+  const value = request.headers[name];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 /**
- * Maps TokenVerificationError codes to RFC 6750 error strings and descriptions.
- */
-const TOKEN_ERROR_MAP: Record<string, { error: string; description: string }> = {
-  TOKEN_EXPIRED: {
-    error: 'expired_token',
-    description: 'The access token has expired',
-  },
-  TOKEN_INVALID: {
-    error: 'invalid_token',
-    description: 'The access token is invalid',
-  },
-  JWKS_NO_MATCH: {
-    error: 'invalid_token',
-    description: 'The access token signature could not be verified',
-  },
-  CLAIM_VALIDATION_FAILED: {
-    error: 'invalid_token',
-    description: 'The access token claim validation failed',
-  },
-  APP_MISMATCH: {
-    error: 'invalid_token',
-    description: 'The access token was issued for a different application',
-  },
-};
-
-/**
- * Guard that validates JWT bearer tokens / API tokens and enforces
- * feature-flag requirements (people) and API-token privileges (machines).
+ * Checks every request's credential through auth-core's verifier: the
+ * signature against the app's key set, the issuer, the audience and the
+ * expiry, and the app's revocation list, so a session that ended, a member who
+ * was removed or a key that was revoked is refused within seconds. While Bridge
+ * cannot be checked it answers 503, never yes.
  *
- * Supports two authentication paths that are evaluated **independently**:
- *
- * 1. **API token path** (x-api-key header):
- *    - If `req.bridgeApiToken` is already set (pre-processed by bridge-api middleware),
- *      the guard trusts it and skips re-verification.
- *    - Otherwise, if x-api-key looks like a JWT, verifies via JWKS and sets
- *      `req.bridgeApiToken`.
- *    - Enforces `@RequirePrivilege` when present — an API token's scope. It is
- *      an API-token check only; people are gated by flags.
- *
- * 2. **User JWT path** (Authorization: Bearer header):
- *    - Verifies via JWKS (user token endpoint), then sets
- *      `req.bridgeUser`, `req.bridgeTenant`, and `req.bridgeAccessToken`.
- *    - Enforces `@RequireFeatureFlag` and the matching route rule's `featureFlag`.
- *
- * **When both headers are present (e.g. cloud-views always sends both), both paths
- * run and both contexts coexist on `request`.** The guard returns true as long as at
- * least one credential is valid (subject to `@AcceptAuth` and per-credential checks).
- *
- * Returns RFC 6750-compliant WWW-Authenticate headers on 401 responses (HTTP only).
- *
- * Supports both HTTP and GraphQL execution contexts.
+ * Then the route's flag requirement (`@RequireFlag`, or a rule's
+ * `featureFlag`), evaluated by Bridge for the caller.
  */
 @Injectable()
 export class BridgeAuthGuard implements CanActivate {
+  private readonly logger = new Logger('Bridge');
+  private readonly rules: { rule: RouteRule; pattern: RegExp | null }[];
+
   constructor(
     private readonly reflector: Reflector,
-    private readonly configService: BridgeConfigService,
-    private readonly jwksService: JwksService,
-    private readonly featureFlagService: FeatureFlagService,
-  ) {}
+    @Inject(BRIDGE_SERVER) private readonly server: BridgeServer,
+    @Inject(BRIDGE_OPTIONS) private readonly options: BridgeModuleOptions,
+  ) {
+    this.rules = (options.guard?.rules ?? []).map((rule) => ({ rule, pattern: rule.path === undefined ? null : pathPattern(rule.path) }));
+  }
+
+  private log(message: string, details?: Record<string, unknown>): void {
+    if (this.options.debug) this.logger.debug(details === undefined ? message : `${message} ${JSON.stringify(details)}`);
+  }
+
+  private findRule(request: HttpRequestLike, operation: string | null): RouteRule | undefined {
+    const path = pathOf(request);
+    const method = (request.method ?? '').toUpperCase();
+    return this.rules.find(({ rule, pattern }) => {
+      if (rule.method !== undefined && rule.method.toUpperCase() !== method) return false;
+      if (rule.graphqlOperation !== undefined) return operation !== null && rule.graphqlOperation === operation;
+      return pattern !== null && pattern.test(path);
+    })?.rule;
+  }
+
+  private metadata<T>(key: string, context: ExecutionContext): T | undefined {
+    return this.reflector.getAllAndOverride<T>(key, [context.getHandler(), context.getClass()]);
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const { request, response, path, method, operationName } = this.extractContext(context);
-
-    this.configService.log(
-      `Guard checking: ${method} ${operationName ? `graphql/${operationName}` : path}`,
-    );
-
-    // 1. Check if route is public (decorator takes precedence)
-    const isPublicDecorator = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-
-    if (isPublicDecorator) {
-      this.configService.log('Route is public (decorator)');
-      return true;
+    const request = requestOf(context);
+    if (request === null) {
+      // Another transport carries no credential this guard can check: only a public handler passes.
+      if (this.metadata<boolean>(IS_PUBLIC_KEY, context)) return true;
+      throw new UnauthorizedException('This handler needs a credential, and its transport carries none.');
     }
+    const operation = graphqlOperationOf(context);
+    const rule = this.findRule(request, operation);
+    const open =
+      this.metadata<boolean>(IS_PUBLIC_KEY, context) === true ||
+      rule?.privilege === 'ANONYMOUS' ||
+      (rule === undefined && (this.options.guard?.defaultAccess ?? BRIDGE_DEFAULTS.defaultAccess) === 'public');
 
-    // 2. Check route rules from config
-    const matchingRule = this.configService.findMatchingRule(path, method, operationName);
+    const accepted = this.metadata<AuthType>(ACCEPT_AUTH_KEY, context) ?? 'both';
+    const credentials = this.credentialsFor(request, accepted);
+    const method = (request.method ?? 'GET').toUpperCase();
+    const strict = this.metadata<boolean>(STRICT_KEY, context) ?? ((this.options.guard?.strictWrites ?? BRIDGE_DEFAULTS.strictWrites) && WRITES.has(method));
 
-    if (matchingRule?.privilege === 'ANONYMOUS') {
-      this.configService.log('Route is public (config rule: ANONYMOUS)', {
-        path: matchingRule.path,
-        graphqlOperation: matchingRule.graphqlOperation,
-      });
-      return true;
-    }
-
-    // 3. If no rule matches and default is public, allow
-    if (!matchingRule && this.configService.defaultAccess === 'public') {
-      this.configService.log('Route allowed (default access: public)');
-      return true;
-    }
-
-    // 4. Read accepted auth type (default: 'both')
-    const acceptedType = this.reflector.getAllAndOverride<AuthType>(ACCEPT_AUTH_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]) ?? 'both';
-
-    // 5. Check x-api-key header (API token path)
-    const apiKey = request.headers['x-api-key'] as string | undefined;
-    const hasAuthHeader = !!request.headers.authorization;
-    let apiTokenClaims: ApiTokenClaims | null = null;
-
-    // @AcceptAuth('jwt') semantics: the endpoint requires a user JWT for its
-    // user-context decisions. When BOTH headers are present (cloud-views ALWAYS
-    // sends both), we accept the request and let the JWT branch populate
-    // `request.bridgeUser`. We only reject if the API token is the *only*
-    // credential the caller offered.
-    if (apiKey && acceptedType === 'jwt' && !hasAuthHeader) {
-      this.configService.log('API token rejected — endpoint only accepts user JWTs');
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="invalid_request", error_description="API token authentication is not accepted for this endpoint"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'auth type not accepted',
-      });
-    }
-
-    // When @AcceptAuth('jwt') and Bearer is present, the API key is informational
-    // only — skip API-token verification entirely so its result doesn't trigger
-    // privilege checks meant for the JWT path.
-    const skipApiTokenForJwtOnly = acceptedType === 'jwt' && hasAuthHeader;
-
-    if (apiKey && !skipApiTokenForJwtOnly) {
-      if (request.bridgeApiToken) {
-        // a. Pre-processed by bridge-api middleware — trust it, skip re-verification
-        apiTokenClaims = request.bridgeApiToken;
-        this.configService.log('API token pre-processed by middleware', {
-          appId: apiTokenClaims!.appId,
-        });
-      } else if (this.isJwtShaped(apiKey)) {
-        // b. Standalone verification (customer NestJS apps)
-        try {
-          apiTokenClaims = await this.jwksService.verifyApiToken(
-            apiKey,
-            this.configService.appId,
-          );
-          request.bridgeApiToken = apiTokenClaims;
-          this.configService.log('API token verified', { appId: apiTokenClaims.appId });
-        } catch (error) {
-          if (error instanceof TokenVerificationError) {
-            this.configService.log('API token verification failed', { code: error.code });
-            const mapped = TOKEN_ERROR_MAP[error.code] ?? {
-              error: 'invalid_token',
-              description: 'The access token is invalid',
-            };
-            this.setWwwAuthenticate(
-              response,
-              `Bearer error="${mapped.error}", error_description="${mapped.description}"`,
-            );
-            throw new UnauthorizedException({
-              statusCode: 401,
-              error: 'Unauthorized',
-              message: mapped.description,
-            });
-          }
-          this.setWwwAuthenticate(
-            response,
-            'Bearer error="invalid_token", error_description="The access token is invalid"',
-          );
-          throw new UnauthorizedException({
-            statusCode: 401,
-            error: 'Unauthorized',
-            message: 'Access token missing or invalid',
-          });
-        }
+    let actor: Actor | null = null;
+    if (credentials === null) {
+      if (!open) {
+        this.log('Refused: no credential', { method, path: pathOf(request) });
+        setHeader(context, 'WWW-Authenticate', 'Bearer');
+        throw new UnauthorizedException({ statusCode: 401, error: 'Unauthorized', message: this.missingMessage(accepted) });
       }
-      // c. else: non-JWT key (opaque) — no API token context, fall through to Authorization
-    }
-
-    // 6. User JWT path — extract and validate Authorization: Bearer token
-    //
-    // Independent from the API-token path: when both credentials are present
-    // and valid, both contexts coexist on `request` (bridgeApiToken AND
-    // bridgeUser/bridgeTenant/bridgeAccessToken). cloud-views and other
-    // first-party Bridge frontends rely on this — they always send both.
-    const authHeader = request.headers.authorization;
-    let user: BridgeUser | null = null;
-    let token: string | null = null;
-
-    if (authHeader && acceptedType === 'api_token') {
-      this.configService.log('User JWT rejected — endpoint only accepts API tokens');
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="invalid_request", error_description="User JWT authentication is not accepted for this endpoint"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'auth type not accepted',
-      });
-    }
-
-    if (authHeader) {
-      token = this.extractToken(request);
-      if (!token) {
-        this.configService.log('Authorization header present but malformed');
-        this.setWwwAuthenticate(
-          response,
-          'Bearer error="invalid_token", error_description="The access token is invalid"',
-        );
-        throw new UnauthorizedException({
-          statusCode: 401,
-          error: 'Unauthorized',
-          message: 'Access token missing or invalid',
-        });
-      }
-
-      let claims;
-      try {
-        claims = await this.jwksService.verifyToken(token);
-      } catch (error) {
-        if (error instanceof TokenVerificationError) {
-          this.configService.log('Token verification failed', { code: error.code });
-          const mapped = TOKEN_ERROR_MAP[error.code] ?? {
-            error: 'invalid_token',
-            description: 'The access token is invalid',
-          };
-          this.setWwwAuthenticate(
-            response,
-            `Bearer error="${mapped.error}", error_description="${mapped.description}"`,
-          );
-          throw new UnauthorizedException({
-            statusCode: 401,
-            error: 'Unauthorized',
-            message: mapped.description,
-          });
-        }
-        this.setWwwAuthenticate(
-          response,
-          'Bearer error="invalid_token", error_description="The access token is invalid"',
-        );
-        throw new UnauthorizedException({
-          statusCode: 401,
-          error: 'Unauthorized',
-          message: 'Access token missing or invalid',
-        });
-      }
-
-      // Attach user and tenant to request
-      user = transformJwtToBridgeUser(claims);
-      const tenant = transformJwtToBridgeTenant(claims);
-
-      request.bridgeUser = user;
-      request.bridgeTenant = tenant || undefined;
-      request.bridgeAccessToken = token;
-      // TBP-673 — lets `bridge.fromRequest(req)` reuse this verification.
-      rememberVerifiedUserToken(request, token, claims);
-
-      this.configService.log('User authenticated', { userId: user.id, tenantId: user.tenantId });
-    }
-
-    // 7. Require at least one valid credential
-    if (!apiTokenClaims && !user) {
-      this.configService.log('No Authorization header');
-      this.setWwwAuthenticate(
-        response,
-        'Bearer error="missing_token", error_description="No authorization token was provided"',
-      );
-      throw new UnauthorizedException({
-        statusCode: 401,
-        error: 'Unauthorized',
-        message: 'No authorization token was provided',
-      });
-    }
-
-    // 8. API-token privilege check (@RequirePrivilege) — an API token's
-    //    scope, for machine callers. It is not a gate on a person: user JWTs
-    //    are gated by flags below (@RequireFeatureFlag / rule `featureFlag`).
-    if (apiTokenClaims) {
-      const requiredPrivilege = this.getRequiredPrivilege(context);
-      if (requiredPrivilege) {
-        const privileges = apiTokenClaims.privileges ?? [];
-        if (!privileges.includes(requiredPrivilege)) {
-          this.configService.log('Privilege check failed', {
-            required: requiredPrivilege,
-            actual: privileges,
-          });
-          throw new ForbiddenException({
-            statusCode: 403,
-            error: 'Forbidden',
-            message: `Privilege '${requiredPrivilege}' required`,
-          });
-        }
-        this.configService.log('Privilege check passed', { privilege: requiredPrivilege });
+    } else {
+      const result = await this.server.check(credentials, { strict });
+      if (result.ok) {
+        actor = result.actor;
+      } else if (!open) {
+        this.refuse(context, result.error);
+      } else {
+        // A public route: a credential that does not check out is ignored, never trusted.
+        this.log('Public route: the credential did not check out and is ignored', { code: result.error.code });
       }
     }
 
-    // 9. User-JWT-only checks: the rule's token privilege (any-app servers
-    //    only), the handler's flag, then the route rule's flag.
-    if (user) {
-      if (matchingRule?.tokenPrivilege) {
-        const userPrivileges = user.privileges ?? [];
-        if (!userPrivileges.includes(matchingRule.tokenPrivilege)) {
-          this.configService.log('Route token privilege check failed', {
-            required: matchingRule.tokenPrivilege,
-            actual: userPrivileges,
-          });
-          throw new ForbiddenException({
-            statusCode: 403,
-            error: 'Forbidden',
-            message: `Privilege '${matchingRule.tokenPrivilege}' required`,
-          });
-        }
-        this.configService.log('Route token privilege check passed', {
-          privilege: matchingRule.tokenPrivilege,
-        });
-      }
+    let flags: Promise<FlagSet> | null = null;
+    const readFlags = (): Promise<FlagSet> => {
+      // Flags are read with the person's token only, never with a credential that failed its check.
+      flags ??= actor === null ? Promise.resolve(new FlagSet()) : this.server.flags.forRequest(credentials as RequestLike);
+      return flags;
+    };
+    setBridgeState(request, { actor, flags: readFlags });
 
-      // Feature flag requirement (decorator only) — user JWT only
-      const requiredFlag = this.getRequiredFeatureFlag(context);
-      if (requiredFlag && token) {
-        const flagEnabled = await this.featureFlagService.evaluateRequirement(requiredFlag, token);
-        if (!flagEnabled) {
-          const verdict = this.explainFlagFailure(requiredFlag, token);
-          const flagName =
-            typeof requiredFlag === 'string' ? requiredFlag : JSON.stringify(requiredFlag);
-          this.configService.log('Feature flag check failed', {
-            flag: flagName,
-            reason: verdict?.explanation?.reason,
-          });
-          // TBP-756 — 402 FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED /
-          // 403 FEATURE_OFF, with the fix named.
-          throw featureRefusal(flagName, verdict?.explanation, this.configService.manageRoute);
-        }
-        this.configService.log('Feature flag check passed', { flag: requiredFlag });
-      }
-
-      // Route-rule flag (TBP-472). Only user JWTs carry the context a flag
-      // rule is evaluated against, so it runs in the user branch.
-      if (matchingRule?.featureFlag && token) {
-        await this.enforceRouteRuleFlag(matchingRule, token);
+    const requirement = this.metadata<FeatureFlagRequirement>(REQUIRED_FEATURE_FLAG_KEY, context) ?? rule?.featureFlag;
+    if (requirement !== undefined) {
+      const results = await readFlags();
+      const unmet = unmetFlag(results, requirement);
+      if (unmet !== null) {
+        this.log('Refused: flag off', { flag: unmet });
+        throw featureRefusal(featureRefusalBody(results, unmet, this.options.manageRoute ?? BRIDGE_DEFAULTS.manageRoute));
       }
     }
-
+    this.log('Allowed', { method, path: pathOf(request), kind: actor?.kind ?? 'anonymous' });
     return true;
   }
 
-  /**
-   * TBP-756 — why the requirement just refused is off, from the reasons Bridge
-   * sent with that evaluation. Undefined (→ 403 FEATURE_OFF) when the service
-   * cannot say.
-   */
-  private explainFlagFailure(
-    requirement: FeatureFlagRequirement,
-    token: string,
-  ): RequirementVerdict | undefined {
-    const svc = this.featureFlagService as Partial<FeatureFlagService>;
-    if (typeof svc.explainFailure !== 'function') return undefined;
-    try {
-      return svc.explainFailure.call(this.featureFlagService, requirement, token);
-    } catch {
-      return undefined;
+  /** Only the headers the route accepts, so a second credential can never decide. Null when none of them came. */
+  private credentialsFor(request: HttpRequestLike, accepted: AuthType): RequestLike | null {
+    const authorization = header(request, 'authorization');
+    const apiKey = header(request, 'x-api-key');
+    const bearer = authorization !== undefined && /^Bearer\s+\S/i.test(authorization) ? authorization : undefined;
+    if (accepted === 'jwt') return bearer === undefined ? null : { headers: { authorization: bearer } };
+    if (accepted === 'api_token') return apiKey === undefined || apiKey === '' ? null : { headers: { 'x-api-key': apiKey } };
+    if (bearer === undefined && (apiKey === undefined || apiKey === '')) return null;
+    // Both came: the person's token decides, as it did in 0.x.
+    return bearer !== undefined ? { headers: { authorization: bearer } } : { headers: { 'x-api-key': apiKey as string } };
+  }
+
+  private missingMessage(accepted: AuthType): string {
+    if (accepted === 'jwt') return 'This endpoint needs a signed-in person: send Authorization: Bearer <token>.';
+    if (accepted === 'api_token') return 'This endpoint needs a key: send x-api-key.';
+    return 'This endpoint needs a credential: Authorization: Bearer <token>, or x-api-key.';
+  }
+
+  private refuse(context: ExecutionContext, error: unknown): never {
+    if (isBridgeError(error) && error.status === 503) {
+      this.log('Unavailable: Bridge cannot be checked right now', { code: error.code });
+      setHeader(context, 'Retry-After', '5');
+      throw new ServiceUnavailableException({ statusCode: 503, error: 'Service Unavailable', message: 'Credentials cannot be checked right now; try again shortly.' });
     }
-  }
-
-  /**
-   * Enforce a route rule's `featureFlag` for a user JWT (TBP-472): 402
-   * FEATURE_NOT_IN_PLAN / 403 FEATURE_NOT_PERMITTED / 403 FEATURE_OFF when off
-   * (TBP-756), via the same evaluation path as `@RequireFeatureFlag`.
-   * Fail-closed: a flag that cannot be evaluated denies with 403.
-   */
-  private async enforceRouteRuleFlag(rule: RouteRule, token: string): Promise<void> {
-    if (!rule.featureFlag) return;
-    let flagEnabled: boolean;
-    try {
-      flagEnabled = await this.featureFlagService.evaluateRequirement(rule.featureFlag, token);
-    } catch (error) {
-      // Fail-closed: undeterminable flag → deny.
-      this.configService.log('Route feature flag evaluation error — denying (fail-closed)', {
-        error,
-      });
-      throw new ForbiddenException({
-        statusCode: 403,
-        error: 'Forbidden',
-        message: 'Feature flag could not be evaluated',
-      });
-    }
-    if (!flagEnabled) {
-      const flagName =
-        typeof rule.featureFlag === 'string' ? rule.featureFlag : JSON.stringify(rule.featureFlag);
-      const verdict = this.explainFlagFailure(rule.featureFlag, token);
-      this.configService.log('Route feature flag check failed', {
-        flag: flagName,
-        reason: verdict?.explanation?.reason,
-      });
-      throw featureRefusal(flagName, verdict?.explanation, this.configService.manageRoute);
-    }
-    this.configService.log('Route feature flag check passed');
-  }
-
-  /**
-   * Extract request, response and resource info from an HTTP or GraphQL context.
-   * For GraphQL, response is null (WWW-Authenticate headers are not applicable).
-   * GraphQL args order: [root, args, context, info]
-   */
-  private extractContext(context: ExecutionContext): {
-    request: Request;
-    response: Response | null;
-    path: string;
-    method: string;
-    operationName?: string;
-  } {
-    const type = context.getType<string>();
-
-    if (type === 'graphql') {
-      // GQL execution context args: [root, args, gqlContext, info]
-      const gqlContext = context.getArgByIndex(2) as any;
-      const info = context.getArgByIndex(3) as any;
-      const request = (gqlContext?.req ?? gqlContext) as Request;
-      const operationName = info?.fieldName as string | undefined;
-      return { request, response: null, path: '/graphql', method: 'POST', operationName };
-    }
-
-    const request = context.switchToHttp().getRequest<Request>();
-    const response = context.switchToHttp().getResponse<Response>();
-    return { request, response, path: request.path, method: request.method };
-  }
-
-  /**
-   * Set WWW-Authenticate header on the response (no-op for GraphQL).
-   */
-  private setWwwAuthenticate(response: Response | null, value: string): void {
-    response?.setHeader('WWW-Authenticate', value);
-  }
-
-  /**
-   * Detect JWT shape: 3 non-empty base64url segments separated by dots.
-   */
-  private isJwtShaped(token: string): boolean {
-    if (!token) return false;
-    const parts = token.split('.');
-    return parts.length === 3 && parts.every((p) => p.length > 0);
-  }
-
-  /**
-   * Extract bearer token from Authorization header
-   */
-  private extractToken(request: Request): string | null {
-    const authHeader = request.headers.authorization;
-    if (!authHeader) {
-      return null;
-    }
-
-    const [type, token] = authHeader.split(' ');
-    if (type.toLowerCase() !== 'bearer' || !token) {
-      return null;
-    }
-
-    return token;
-  }
-
-  /**
-   * Get required privilege from @RequirePrivilege decorator (API token path)
-   */
-  private getRequiredPrivilege(context: ExecutionContext): string | undefined {
-    return this.reflector.getAllAndOverride<string>(REQUIRED_PRIVILEGE_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
-  }
-
-  /**
-   * Get required feature flag from @RequireFeatureFlag decorator (user JWT path)
-   */
-  private getRequiredFeatureFlag(
-    context: ExecutionContext,
-  ): FeatureFlagRequirement | undefined {
-    return this.reflector.getAllAndOverride<FeatureFlagRequirement>(
-      REQUIRED_FEATURE_FLAG_KEY,
-      [context.getHandler(), context.getClass()],
-    );
+    const code = isBridgeError(error) ? (error.code ?? 'invalid_token') : 'invalid_token';
+    this.log('Refused: the credential did not check out', { code });
+    const description = code === 'revoked' ? 'Access was taken away' : 'The credential is not valid';
+    setHeader(context, 'WWW-Authenticate', `Bearer error="invalid_token", error_description="${description}"`);
+    throw new UnauthorizedException({ statusCode: 401, error: 'Unauthorized', message: description, code });
   }
 }
+

@@ -1,95 +1,45 @@
-// bridge-nestjs/flags — a flag-gated endpoint that refuses says why (TBP-756).
-//
-// Both flag guards (`BridgeFlagGuard` for `@RequireFlag`, `BridgeAuthGuard` for
-// `@RequireFeatureFlag` and route rules) refuse with one of three bodies:
-//
-//   402 FEATURE_NOT_IN_PLAN   — an upgrade alone would turn the feature on
-//   403 FEATURE_NOT_PERMITTED — the person's role or privileges keep it off
-//   403 FEATURE_OFF           — switched off, another condition, the rollout,
-//                               or the reason is unknown
-//
-// Each names the flag and the fix. A 403 keeps the old `error` / `message`
-// fields, so a client reading those sees what it always saw.
-//
-// Pure: no Nest DI and nothing from the auth half, so the auth-free `/flags`
-// entry point can use it.
+import { HttpException, HttpStatus } from '@nestjs/common';
+import type { FlagSet } from '@nebulr-group/bridge-auth-core/server';
+import type { FeatureFlagRequirement } from '../options';
 
-import { ForbiddenException, HttpException, HttpStatus } from '@nestjs/common';
+/**
+ * Why a flag-gated endpoint refused:
+ *
+ *   402 FEATURE_NOT_IN_PLAN — a plan feature is what keeps the flag off: an upgrade would turn it on
+ *   403 FEATURE_OFF         — anything else: the rule, a rollout, switched off, or Bridge could not answer
+ */
+export type FeatureRefusalCode = 'FEATURE_NOT_IN_PLAN' | 'FEATURE_OFF';
 
-/** Why a feature is off — the same values auth-core's evaluator and bridge-api's evaluate return. */
-export type FeatureOffReason = 'plan' | 'permission' | 'off' | 'rule' | 'rollout';
-
-/** Why a flag is off, as the evaluator or Bridge's evaluate endpoint said. */
-export interface FeatureOffExplanation {
-  reason?: FeatureOffReason;
-  /** With `plan`: the plan feature the flag's rule asks for. */
-  feature?: string;
-}
-
-export type FeatureRefusalCode = 'FEATURE_NOT_IN_PLAN' | 'FEATURE_NOT_PERMITTED' | 'FEATURE_OFF';
-
-/** Body of a flag refusal. */
 export interface FeatureRefusalBody {
   statusCode: 402 | 403;
   code: FeatureRefusalCode;
   error: 'Payment Required' | 'Forbidden';
   message: string;
-  /** The flag (or `{any}` / `{all}` requirement, as JSON) that refused. */
+  /** The flag that was off. */
   flag: string;
-  reason?: FeatureOffReason;
-  /** With FEATURE_NOT_IN_PLAN: the plan feature the rule asks for, when it names one. */
+  /** The plan feature the flag's rule needs, for a 402. */
   feature?: string;
-  /**
-   * What fixes it. FEATURE_NOT_IN_PLAN: the path to upgrade at
-   * (`billing.manageRoute`, default `/subscription`). The others: a sentence.
-   */
+  /** Bridge's own words for which part of the rule decided, when it says. */
+  why?: string;
+  /** What the caller can do about it. */
   fix: string;
 }
 
 export const DEFAULT_MANAGE_ROUTE = '/subscription';
 
-const REASONS: ReadonlySet<string> = new Set(['plan', 'permission', 'off', 'rule', 'rollout']);
-
-/** The explanation in an evaluate response or eval result, or `{}` when it carries none. */
-export function readExplanation(source: unknown): FeatureOffExplanation {
-  if (!source || typeof source !== 'object') return {};
-  const s = source as { reason?: unknown; feature?: unknown };
-  if (typeof s.reason !== 'string' || !REASONS.has(s.reason)) return {};
-  return {
-    reason: s.reason as FeatureOffReason,
-    ...(typeof s.feature === 'string' && s.feature ? { feature: s.feature } : {}),
-  };
-}
-
-/** The refusal body for a flag that is off. */
-export function featureRefusalBody(
-  flag: string,
-  explanation: FeatureOffExplanation | undefined,
-  manageRoute: string = DEFAULT_MANAGE_ROUTE,
-): FeatureRefusalBody {
-  const reason = explanation?.reason;
-  if (reason === 'plan') {
-    const what = explanation?.feature ?? flag;
+/** The refusal for a flag that is off, from the reason Bridge gave. */
+export function featureRefusalBody(flags: FlagSet, flag: string, manageRoute: string = DEFAULT_MANAGE_ROUTE): FeatureRefusalBody {
+  const reason = flags.reason(flag);
+  if (reason.entitlement !== null) {
     return {
       statusCode: 402,
       code: 'FEATURE_NOT_IN_PLAN',
       error: 'Payment Required',
-      message: `Your plan does not include '${what}'. Upgrade to use it.`,
+      message: `Your plan does not include '${reason.entitlement}'. Upgrade to use it.`,
       flag,
-      reason,
-      ...(explanation?.feature ? { feature: explanation.feature } : {}),
+      feature: reason.entitlement,
+      ...(reason.why === null ? {} : { why: reason.why }),
       fix: manageRoute || DEFAULT_MANAGE_ROUTE,
-    };
-  }
-  if (reason === 'permission') {
-    return {
-      statusCode: 403,
-      code: 'FEATURE_NOT_PERMITTED',
-      error: 'Forbidden',
-      message: `Feature flag '${flag}' is not enabled for your role or privileges`,
-      flag,
-      reason,
-      fix: 'Ask a workspace admin for access.',
     };
   }
   return {
@@ -98,39 +48,37 @@ export function featureRefusalBody(
     error: 'Forbidden',
     message: `Feature flag '${flag}' is not enabled`,
     flag,
-    ...(reason ? { reason } : {}),
-    fix:
-      reason === 'off'
-        ? 'This feature is switched off for everyone.'
-        : 'This feature is not available to this user.',
+    ...(reason.why === null ? {} : { why: reason.why }),
+    fix: 'This feature is not available to this caller.',
   };
 }
 
-/**
- * 402 FEATURE_NOT_IN_PLAN. Nest has no built-in exception for 402.
- */
 export class FeatureNotInPlanException extends HttpException {
   constructor(public readonly body: FeatureRefusalBody) {
     super(body, HttpStatus.PAYMENT_REQUIRED);
   }
 }
 
-/**
- * 403 FEATURE_NOT_PERMITTED / FEATURE_OFF. A `ForbiddenException`, as the flag
- * guards threw before TBP-756, so an app's exception filters keep matching.
- */
-export class FeatureForbiddenException extends ForbiddenException {
+export class FeatureForbiddenException extends HttpException {
   constructor(public readonly body: FeatureRefusalBody) {
-    super(body);
+    super(body, HttpStatus.FORBIDDEN);
   }
 }
 
-/** A flag refusal as an exception: 402 for a plan reason, a `ForbiddenException` otherwise. */
-export function featureRefusal(
-  flag: string,
-  explanation: FeatureOffExplanation | undefined,
-  manageRoute?: string,
-): FeatureNotInPlanException | FeatureForbiddenException {
-  const body = featureRefusalBody(flag, explanation, manageRoute);
+/** The exception for a refusal body. */
+export function featureRefusal(body: FeatureRefusalBody): HttpException {
   return body.statusCode === 402 ? new FeatureNotInPlanException(body) : new FeatureForbiddenException(body);
+}
+
+/**
+ * The first flag that keeps a requirement from being met, or null when it is
+ * met. For `any`, the first flag listed stands for the refusal; a 402 is
+ * preferred when an upgrade would turn on any of them.
+ */
+export function unmetFlag(flags: FlagSet, requirement: FeatureFlagRequirement): string | null {
+  if (typeof requirement === 'string') return flags.enabled(requirement) ? null : requirement;
+  if ('all' in requirement) return requirement.all.find((key) => !flags.enabled(key)) ?? null;
+  const keys = requirement.any;
+  if (keys.some((key) => flags.enabled(key))) return null;
+  return keys.find((key) => flags.reason(key).entitlement !== null) ?? keys[0] ?? '(no flag named)';
 }

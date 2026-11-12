@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.0.0-alpha.1] - 2026-11-12
+
+The first alpha for the new Bridge. It checks tokens with the same verifier as `@nebulr-group/bridge-auth-core` 1.0 and works with the new Bridge only.
+
+### Added
+
+- **Access taken away within seconds.** The guard follows your app's revocation list, so a session that ended, a removed member or a revoked key is refused within seconds instead of when the token expires. Writes are checked against a list at most 30 seconds behind; `@Strict()` does the same for a sensitive read. While Bridge cannot be checked the guard answers 503, never yes.
+- **Keys.** `x-api-key` takes personal, service account and app keys; the key becomes the caller.
+- **`@CurrentActor()`.** The verified caller: who it is, the workspace, the app, the session and the workspace's standing.
+- **`@Flag(key, fallback)` and `@Flags()`.** A flag's value, or the whole set, worked out by Bridge for the caller.
+- **`@Meter(metric)`.** Counts usage for the caller's workspace once the handler succeeds, in batches that are never counted twice.
+- **Management client.** `BridgeManagementService`: workspaces, members, invites, plans and each workspace's billing with your app key or a workspace key; the calling person's keys and their workspace's keys with their own token.
+- **Webhooks.** `@BridgeWebhook()` and `verifyWebhook()` check Bridge's webhook signature, with two secrets during a rotation's 24-hour overlap.
+
+### Changed (breaking)
+
+- **The issuer is the only address.** `forRoot({ issuer })` or `BRIDGE_ISSUER` replaces `appId`, `apiBaseUrl`, `introspectionUrl`, `apiTokenJwksUrl` and `userJwksUrl`.
+- **`@CurrentUser()` and `@CurrentTenant()` are removed.** Use `@CurrentActor()`. The Actor carries no role, privileges or plan: gate with a flag.
+- **`@RequirePrivilege()` and a rule's `tokenPrivilege` are removed.** Put the privilege in a flag's rule and use `@RequireFlag`.
+- **Plan limits are flag rules.** `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement` and `BridgeQuotaService` are removed. Gate with `@RequireFlag` and count with `@Meter`.
+- **A flag that is off answers `403 FEATURE_OFF`** unless a plan feature keeps it off (`402 FEATURE_NOT_IN_PLAN`, unchanged). `FEATURE_NOT_PERMITTED` is no longer sent.
+- **Flags come from Bridge for the caller.** The `/flags` entry point, `BridgeFlagsModule`, `BridgeFlagsService`, `BridgeContextInterceptor` and the auth-core flag re-exports are removed; a call with a key gets every flag's fallback.
+- **`JwksService`, `FeatureFlagService`, `BridgeHttpService`, `BridgeConfigService`, `TenantScope` and `BridgeService.fromJwt()` are removed.** `BridgeService` checks and reads for the caller; `BridgeManagementService` calls Bridge's API.
+- **`RequireFlag` and `RequireFeatureFlag` are the same decorator**, from the main entry point.
+- **Node 20.19 or later.**
+
+Unchanged: `BridgeModule.forRoot()` / `forRootAsync()`, `BridgeAuthGuard`, `guard.global`, `guard.defaultAccess`, route rules with `privilege` and `featureFlag`, `@Public()`, `@AcceptAuth()`, `@RequireFeatureFlag()`, `FeatureNotInPlanException`, `FeatureForbiddenException`, `featureRefusalBody`, `BRIDGE_DEFAULTS`.
+
 ## [0.8.0] - 2026-09-30
 
 ### Added
