@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-nestjs",
-  "version": "1.0.0-alpha.1",
+  "version": "1.0.0-alpha.2",
   "description": "The Bridge for NestJS: access tokens checked against the app's revocation list, flag-gated endpoints, \"count this\", the management client and webhook checks, as a module, a guard and decorators.",
   "author": "Nebulr Group",
   "license": "MIT",
