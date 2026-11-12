@@ -12,10 +12,10 @@ export class TeamController {
     return this.management.forCaller(request).workspace.members.list();
   }
 
-  /** A key for the caller's workspace, for its CI or integrations. Shown once. */
+  /** A key for the caller's workspace, for its CI or integrations, holding the privileges asked for. Shown once. */
   @RequireFlag('bridge-team-manage')
   @Post('workspace-keys')
-  createKey(@Req() request: { headers: unknown }, @Body() body: { name: string }) {
-    return this.management.forCaller(request).workspaceKeys.create({ name: body.name });
+  createKey(@Req() request: { headers: unknown }, @Body() body: { name: string; privileges?: string[] }) {
+    return this.management.forCaller(request).workspaceKeys.create({ name: body.name, ...(body.privileges === undefined ? {} : { privileges: body.privileges }) });
   }
 }
