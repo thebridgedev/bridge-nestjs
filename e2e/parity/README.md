@@ -12,6 +12,7 @@ It is skipped unless it is set up. Run it in a container, from the repository ro
 |---|---|
 | `tokens.parity.spec.ts` | A real person's token is accepted; none, malformed, forged, a refresh token, another app's and an expired token are refused (the expired one waits out the 5 minutes; `PARITY_FAST=1` skips it) |
 | `flag-gate.parity.spec.ts` | A route gated by a flag: off refuses and names the flag; on, flipped with the app key, lets the person in within seconds; off again refuses |
+| `plan-gate.parity.spec.ts` | A route whose flag needs a plan feature: a workspace on a plan without it is refused with `402 FEATURE_NOT_IN_PLAN` naming the feature and where to upgrade; moved to a plan that has it, the same call is let in |
 | `management.parity.spec.ts` | The management client with the app key (workspaces, members, invites, plans, the payer) and with a workspace key (its own workspace only; another refused) |
 | `flags.parity.spec.ts` | The management client's flags area with the app key: make, list and read a flag with its ETag; change it on the revision named and refuse a stale one with `BridgeConflictError`; kill, restore, schedule, export, import (dry run and for real) and delete |
 | `metering.parity.spec.ts` | What `@Meter` counts reaches Billing's usage for the caller's workspace |
