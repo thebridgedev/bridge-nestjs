@@ -117,6 +117,10 @@ create() { … }
 
 Once the handler succeeds, Bridge counts one for the caller's workspace. Counts are sent in batches every few seconds and resent with the same ids, so nothing is counted twice. A limit on a count is a flag rule (`tickets-create` off once the plan's number is reached): the code only counts. `BridgeService.count(actor, metric, n)` counts by hand.
 
+A flag gate that is off because the plan is why (a plan feature the workspace lacks, or a limit that is used up) answers 402 `FEATURE_NOT_IN_PLAN` with an RFC 9457 problem body (`urn:bridge:problem:entitlement-missing` or `urn:bridge:problem:limit-reached`), never 403; any other reason stays 403 `FEATURE_OFF`.
+
+**Writes in a workspace that cannot write.** The guard refuses a signed-in person's write (any method but `GET`, `HEAD` and `OPTIONS`; for GraphQL, a mutation) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402, `urn:bridge:problem:billing-locked`), and with 503 and `Retry-After` while Bridge cannot tell. The body is the problem. Reads are never refused for these reasons, a `@Public()` route is not affected, and keys are unchanged. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.10.
+
 ## Management client
 
 `BridgeManagementService` calls Bridge's API with your app key:
