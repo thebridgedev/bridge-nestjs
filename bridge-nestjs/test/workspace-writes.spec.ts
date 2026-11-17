@@ -56,6 +56,12 @@ class Things {
   exports() {
     return { ok: true };
   }
+
+  @RequireFlag('exports')
+  @Post('gated')
+  gated() {
+    return { ok: true };
+  }
 }
 
 describe('the guard and a write the workspace may not make', () => {
@@ -114,11 +120,28 @@ describe('the guard and a write the workspace may not make', () => {
     expect(refused.body).toMatchObject({ type: 'urn:bridge:problem:workspace-not-active', status: 403, standing: 'suspended' });
   });
 
-  it('answers 402 with the billing-locked problem when the workspace is locked for payment', async () => {
+  it('answers 402 BILLING_GATE_ENGAGED, as 0.9 did, with the billing-locked problem beside it, when the workspace is locked for payment', async () => {
     answer = { ok: false, error: locked };
     const refused = await call('post', '/things');
     expect(refused.status).toBe(402);
-    expect(refused.body).toMatchObject({ type: 'urn:bridge:problem:billing-locked', reason: 'billing_locked', billing: { access: 'payment_due' } });
+    expect(refused.body).toMatchObject({
+      statusCode: 402,
+      code: 'BILLING_GATE_ENGAGED',
+      message: 'Billing gate engaged — workspace access is locked',
+      reason: 'billing_locked',
+      billing: { status: 'past_due', gateEngaged: true, recoveryUrl: '/subscription', access: 'payment_due' },
+      fix: '/subscription',
+      type: 'urn:bridge:problem:billing-locked',
+      status: 402,
+      detail: 'Locked.',
+    });
+  });
+
+  it('answers a route behind a flag gate in a locked workspace the same 402 BILLING_GATE_ENGAGED', async () => {
+    answer = { ok: false, error: locked };
+    const refused = await call('post', '/gated');
+    expect(refused.status).toBe(402);
+    expect(refused.body).toMatchObject({ code: 'BILLING_GATE_ENGAGED', reason: 'billing_locked' });
   });
 
   it('answers 503 with Retry-After, never 500, when the state cannot be told', async () => {

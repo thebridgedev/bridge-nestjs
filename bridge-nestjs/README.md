@@ -119,7 +119,7 @@ Once the handler succeeds, Bridge counts one for the caller's workspace. Counts 
 
 A flag gate that is off because the plan is why (a plan feature the workspace lacks, or a limit that is used up) answers 402 `FEATURE_NOT_IN_PLAN` with an RFC 9457 problem body (`urn:bridge:problem:entitlement-missing` or `urn:bridge:problem:limit-reached`), never 403; any other reason stays 403 `FEATURE_OFF`.
 
-**Writes in a workspace that cannot write.** The guard refuses a signed-in person's write (any method but `GET`, `HEAD` and `OPTIONS`; for GraphQL, a mutation) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402, `urn:bridge:problem:billing-locked`), and with 503 and `Retry-After` while Bridge cannot tell. The body is the problem. Reads are never refused for these reasons, a `@Public()` route is not affected, and keys are unchanged. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.10.
+**Writes in a workspace that cannot write.** The guard refuses a signed-in person's write (any method but `GET`, `HEAD` and `OPTIONS`; for GraphQL, a mutation) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402 `BILLING_GATE_ENGAGED`, as in 0.9, with the problem `urn:bridge:problem:billing-locked` beside it), and with 503 and `Retry-After` while Bridge cannot tell. The body is the problem. Reads are never refused for these reasons, a `@Public()` route is not affected, and keys are unchanged. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.10.
 
 ## Plan limits
 
@@ -141,7 +141,7 @@ export() { … }
 analytics() { … }
 ```
 
-`@RequireQuota` holds one unit of the plan's limit before the handler runs, counts it when the handler answers 2xx and gives it back when it fails, so two requests never get the last unit. At the limit the answer is `402 QUOTA_EXCEEDED` (`metric`, `used`, `limit`, `fix`); a workspace locked for payment gets `402 BILLING_GATE_ENGAGED`; if Bridge cannot answer, `503 QUOTA_UNAVAILABLE`. With `current` (a gauge: tickets, projects) the gauge is set to your count after a 2xx; without it (a counter: exports, calls) the held unit is the count, and an `Idempotency-Key` header makes a retry reuse it. `@SyncQuota` sets a gauge after a delete. A `metered` limit never refuses; the overage is billed. Needs `appKey`.
+`@RequireQuota` holds one unit of the plan's limit before the handler runs, counts it when the handler answers 2xx and gives it back when it fails, so two requests never get the last unit. At the limit the answer is `402 QUOTA_EXCEEDED` (`metric`, `used`, `limit`, `fix`); a workspace locked for payment gets `402 BILLING_GATE_ENGAGED`; if Bridge cannot answer, `503 QUOTA_UNAVAILABLE`. With `current` (a gauge: tickets, projects) the gauge is set to your count after a 2xx; without it (a counter: exports, calls) the held unit is the count, and every request holds its own. `@SyncQuota` sets a gauge after a delete. A `metered` limit never refuses; the overage is billed. Needs `appKey`.
 
 `@RequireEntitlement(key)` refuses with `403 ENTITLEMENT_REQUIRED` unless the plan includes the feature; it asks the flag `bridge:billing.entitlement.<key>`. `BridgeQuotaService` does the same as plain calls: `hold`, `check`, `assertQuota`, `record`, `sync`, `assertEntitlement`.
 

@@ -23,7 +23,23 @@ const handled = new WeakSet<object>();
 
 interface HttpLikeResponse {
   statusCode?: number;
+  // Express / Node
+  setHeader?: (name: string, value: string) => unknown;
+  getHeader?: (name: string) => unknown;
+  // Fastify reply
+  header?: (name: string, value: string) => unknown;
 }
+
+/**
+ * Outside production, a response from an endpoint that counts a metric says
+ * so, so the browser SDK can warn in development when the page also reports
+ * that metric (the same action counted twice). Never sent when
+ * `NODE_ENV=production`.
+ */
+export const USAGE_COUNTED_HEADER = 'X-Bridge-Usage-Counted';
+
+/** How often a confirm is asked before the unit is counted another way: Bridge counts a confirm once, so asking again is safe. */
+const CONFIRM_ATTEMPTS = 3;
 
 @Injectable()
 export class BridgeQuotaInterceptor implements NestInterceptor {
@@ -47,9 +63,11 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
 
     const before = async (): Promise<UsageHold | null> => {
       if (entitlement) await this.quota.assertEntitlement(request, entitlement);
+      // This endpoint is where these metrics are counted. Marked before the hold, so a 402 carries it too.
+      this.markCounted(response, [required?.metric, sync?.metric].filter((metric): metric is string => metric !== undefined));
       if (!required) return null;
-      const key = this.idempotencyHeader(request);
-      return this.quota.hold(request, required.metric, key === undefined ? {} : { idempotencyKey: key });
+      // A new hold for every request: the client's Idempotency-Key is never what a unit is held or counted for.
+      return this.quota.hold(request, required.metric);
     };
 
     // Once: the unit is confirmed, or given back, and the gauges are set.
@@ -57,7 +75,7 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
     const settle = async (held: UsageHold | null, ok: boolean): Promise<void> => {
       if (settled) return;
       settled = true;
-      if (held !== null) await (ok ? this.confirm(held) : this.giveBack(held));
+      if (held !== null) await (ok ? this.confirm(request, held, required?.current === undefined) : this.giveBack(held));
       if (!ok) return;
       const writes: Promise<void>[] = [];
       if (required?.current) writes.push(this.quota.sync(request, required.metric, this.counter(required, context, request)!));
@@ -82,22 +100,31 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
     );
   }
 
-  /** The work happened: the unit counts. Never fails the response. */
-  private async confirm(held: UsageHold): Promise<void> {
-    try {
-      await held.confirm();
-    } catch (error) {
-      if (this.isGone(error)) {
-        // Bridge gives a unit back after 120 seconds: the handler took longer than that.
-        this.logger.warn(`The unit held for "${held.metric}" was no longer held when the handler finished (after ${String(held.expiresInSeconds)} s); it was not counted.`);
-        return;
-      }
+  /**
+   * The work happened: the unit counts. Never fails the response: the work is
+   * done, and failing it would only invite a retry that does it twice.
+   * Bridge counts a confirm once, so it is asked again when Bridge did not
+   * answer. When the hold is gone (the handler outlasted it, so the unit was
+   * free for another request) or Bridge never answers, a counter is reported
+   * instead, under a one-time id of the hold: the work is still counted, once,
+   * and the next request at the limit is refused.
+   */
+  private async confirm(request: object, held: UsageHold, counter: boolean): Promise<void> {
+    for (let attempt = 1; attempt <= CONFIRM_ATTEMPTS; attempt++) {
       try {
         await held.confirm();
-      } catch (again) {
-        if (!this.isGone(again)) this.logger.error(`Could not count "${held.metric}" after the request: ${again instanceof Error ? again.message : String(again)}`);
+        return;
+      } catch (error) {
+        if (this.isGone(error)) {
+          this.logger.warn(`The unit held for "${held.metric}" was no longer held when the handler finished (after ${String(held.expiresInSeconds)} s); it is counted from a report instead.`);
+          break;
+        }
+        if (attempt === CONFIRM_ATTEMPTS) {
+          this.logger.error(`Could not confirm "${held.metric}" after the request; it is counted from a report instead: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     }
+    if (counter) await this.quota.countUnconfirmed(request, held);
   }
 
   /** The work did not happen: the unit goes back. Never fails the response. */
@@ -140,11 +167,29 @@ export class BridgeQuotaInterceptor implements NestInterceptor {
     }
   }
 
-  private idempotencyHeader(request: object): string | undefined {
-    const headers = (request as { headers?: Record<string, string | string[] | undefined> }).headers;
-    const raw = headers?.['idempotency-key'];
-    const value = Array.isArray(raw) ? raw[0] : raw;
-    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  /**
+   * Name the metrics this endpoint counts on the response, outside production
+   * only, and expose the header to cross-origin pages. Best effort: never
+   * fails the request.
+   */
+  private markCounted(response: HttpLikeResponse | undefined, metrics: string[]): void {
+    if (!response || metrics.length === 0 || process.env.NODE_ENV === 'production') return;
+    try {
+      const set = (name: string, value: string) => {
+        if (typeof response.setHeader === 'function') response.setHeader(name, value);
+        else if (typeof response.header === 'function') response.header(name, value);
+      };
+      const current = (name: string): string => {
+        const raw = typeof response.getHeader === 'function' ? response.getHeader(name) : undefined;
+        return Array.isArray(raw) ? raw.join(', ') : typeof raw === 'string' ? raw : '';
+      };
+      const merge = (existing: string, add: string[]) =>
+        [...new Set([...existing.split(',').map((value) => value.trim()).filter(Boolean), ...add])].join(', ');
+      set(USAGE_COUNTED_HEADER, merge(current(USAGE_COUNTED_HEADER), [...new Set(metrics)]));
+      set('Access-Control-Expose-Headers', merge(current('Access-Control-Expose-Headers'), [USAGE_COUNTED_HEADER]));
+    } catch {
+      /* a development hint never breaks the request */
+    }
   }
 
   private extract(context: ExecutionContext): { request?: object; response?: HttpLikeResponse } {

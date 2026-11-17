@@ -34,8 +34,7 @@ export interface RequireQuotaOptions<C = any> {
    * your own count; after a 2xx the gauge is set to the new count.
    *
    * Leave out for a counter: something that happened (an export, an API
-   * call). One is counted after a 2xx, and the request's `Idempotency-Key`
-   * header, when it sends one, makes a retry hold the same unit.
+   * call). One is counted after each 2xx; every request holds its own unit.
    */
   current?: QuotaCounter<C>;
 }

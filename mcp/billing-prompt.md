@@ -138,8 +138,8 @@ export class TicketsController {
 `current` receives a `QuotaTenant` (`t.id` is the verified workspace id, `t.userId` the person, `t.actor` the verified caller) and the **controller instance**, so it can reach the controller's injected services. Return your own count: after a 2xx the gauge is set to it, so it heals itself if Bridge's copy ever missed an update. There is no decrement: every create and delete sends the whole current count.
 
 - **Before the handler:** Bridge holds one unit for this request, so two requests never get the last one. At the limit the answer is `402 QUOTA_EXCEEDED` with `metric`, `used`, `limit` and `fix`, the app's subscription page (`manageRoute` in `BridgeModule.forRoot`). A `metered` quota never refuses. A metric with no quota on the plan is unlimited.
-- **After the handler:** on a **2xx** the unit counts. A handler that throws or answers 4xx/5xx gives the unit back and records nothing. A hold Bridge already gave back (a handler slower than 120 seconds) is logged and never fails the response.
-- **Idempotency:** a request's `Idempotency-Key` header makes a retry reuse the unit still held for that key, for the same workspace and metric. Without the header, every request holds its own unit.
+- **After the handler:** on a **2xx** the unit counts. A handler that throws or answers 4xx/5xx gives the unit back and records nothing. A hold Bridge already gave back (a handler slower than 120 seconds) is counted from a usage report instead, once, logged, and never fails the response.
+- **Retries:** every request holds its own unit; the `Idempotency-Key` header is not used to count, so a retried request that succeeds counts again.
 - **Locked workspace:** answered `402 BILLING_GATE_ENGAGED` (`reason: "billing_locked"`).
 - **Fail-closed:** if Bridge cannot answer, the request is refused with `503 QUOTA_UNAVAILABLE`.
 - Needs the module's `appKey` and a caller verified by `BridgeAuthGuard` that acts in a workspace; a `@Public()` route answers 401.
@@ -212,7 +212,7 @@ const branding = await tenant.branding; // { logo, name, primaryButtonBgColor?, 
 
 ### Usage by hand
 
-`@RequireQuota` covers the usual case. For a hold you control (a bulk job, a check in the middle of a handler), inject `BridgeQuotaService`: `hold(req, metric, { quantity?, idempotencyKey? })` returns a unit to `confirm()` or `giveBack()`, `assertQuota` and `check` read without holding, and `record` and `sync` write. When you report usage yourself — a metered quantity that is not one-per-request, say, or a count from a worker — call `BridgeService.count(actor, metric, quantity)`. Pass a stable `id` option (`{ id: entityId }`) so a retried request cannot double-bill.
+`@RequireQuota` covers the usual case. For a hold you control (a bulk job, a check in the middle of a handler), inject `BridgeQuotaService`: `hold(req, metric, { quantity? })` returns a unit to `confirm()` or `giveBack()`, `assertQuota` and `check` read without holding, and `record` and `sync` write. When you report usage yourself — a metered quantity that is not one-per-request, say, or a count from a worker — call `BridgeService.count(actor, metric, quantity)`. Pass a stable `id` option (`{ id: entityId }`) so a retried request cannot double-bill.
 
 Count usage once, where the action happens: an action that calls this backend is counted here, and the frontend then reports nothing for it. An action that never reaches a server is counted by the frontend plugin — that is first-class, and it trusts the browser. The per-unit **price** is configuration, set via `set_plan_quota` with `policy: "metered"` and `priceAmount` (MCP) or `bridge plan quota set <key> --policy metered --price-amount <n>` (CLI) — see "Configuring plans" above. Bridge meters and bills it through Stripe. Do not add Stripe code here.
 
@@ -282,7 +282,7 @@ Only when the developer explicitly asks for no flag: `@RequireEntitlement('<feat
 
 1. **Build:** the project builds with no TypeScript or import errors.
 2. **Limit:** with a `tickets` hard limit of N, the (N+1)th `POST` — sent with curl, not through the UI — answers 402 `QUOTA_EXCEEDED` with `metric`, `used`, `limit` and `fix`.
-3. **Counting:** a request that succeeds raises Bridge's `used` for the metric by one; a request that fails (4xx/5xx) raises it by none. Two requests with the same `Idempotency-Key` sent together count once.
+3. **Counting:** a request that succeeds raises Bridge's `used` for the metric by one; a request that fails (4xx/5xx) raises it by none. Two requests sent together each count, whatever `Idempotency-Key` they carry.
 4. **Plan-feature gate:** a tenant whose plan does not list `reports` gets 402 `FEATURE_NOT_IN_PLAN` from a `featureFlag: 'reports'` route; after `bridge plan feature add <its plan> reports` it gets 200, with no release.
 5. **Subscription read:** `GET /billing/status` returns the tenant's current `plan`, `status`, and `endsAt` matching the dashboard.
 6. **Fail-closed:** a flag that does not exist is off, so its route is refused, not opened.

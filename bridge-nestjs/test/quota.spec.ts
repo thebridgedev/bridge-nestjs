@@ -3,7 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { BridgeError, FlagSet, type Actor, type BridgeServer, type QuotaSnapshot } from '@nebulr-group/bridge-auth-core/server';
-import { BridgeAuthGuard, BridgeQuotaInterceptor, BridgeQuotaService, BridgeService, QuotaExceededException, RequireEntitlement, RequireQuota, SyncQuota } from '../src';
+import { BridgeAuthGuard, BridgeQuotaInterceptor, BridgeQuotaService, BridgeService, QuotaExceededException, RequireEntitlement, RequireQuota, SyncQuota, USAGE_COUNTED_HEADER } from '../src';
 import { BRIDGE_OPTIONS, BRIDGE_SERVER } from '../src/options';
 import { setBridgeState } from '../src/request-context';
 
@@ -143,7 +143,7 @@ describe('plan limit decorators', () => {
       const answer = await call('post', '/exports');
       expect(answer.status).toBe(201);
       expect(order).toEqual(['hold', 'handler', 'confirm']);
-      expect(hold).toHaveBeenCalledWith(actor, 'exports', {});
+      expect(hold).toHaveBeenCalledWith(actor, 'exports', { decision: expect.stringMatching(/^hold-/) });
       expect(giveBack).not.toHaveBeenCalled();
       expect(set).not.toHaveBeenCalled();
     });
@@ -205,27 +205,62 @@ describe('plan limit decorators', () => {
       expect(order).toEqual(['hold', 'handler', 'giveBack']);
     });
 
-    it('does not fail the response when confirming finds the hold gone after 120 seconds', async () => {
+    it('counts the unit from a report, once, when confirming finds the hold gone, and never fails the response', async () => {
       confirm.mockRejectedValueOnce(new BridgeError('not-found', 'Not found', { status: 404 }));
       const answer = await call('post', '/exports');
       expect(answer.status).toBe(201);
       expect(confirm).toHaveBeenCalledTimes(1);
+      expect(counted).toHaveBeenCalledTimes(1);
+      const [, metric, value, options] = counted.mock.calls[0] as [Actor, string, number, { id: string }];
+      expect([metric, value]).toEqual(['exports', 1]);
+      // A one-time id of the hold: sent again, it counts once.
+      const req = {};
+      setBridgeState(req, { actor, flags: async () => flagSet });
+      expect(options.id).toBe(app.get(BridgeQuotaService).idempotencyKeyFor(req, 'exports', 'hold-h-1'));
     });
 
-    it('retries a confirm that failed for another reason once, and never fails the response', async () => {
-      confirm.mockRejectedValueOnce(new BridgeError('unavailable', 'down', { status: 503 })).mockRejectedValueOnce(new BridgeError('unavailable', 'down', { status: 503 }));
-      const answer = await call('post', '/exports');
-      expect(answer.status).toBe(201);
+    it('asks a confirm again while Bridge does not answer (Bridge counts it once), and counts the unit from a report if it never does', async () => {
+      confirm.mockRejectedValueOnce(new BridgeError('unavailable', 'down', { status: 503 }));
+      expect((await call('post', '/exports')).status).toBe(201);
       expect(confirm).toHaveBeenCalledTimes(2);
+      expect(counted).not.toHaveBeenCalled();
+      confirm.mockReset();
+      confirm.mockRejectedValue(new BridgeError('unavailable', 'down', { status: 503 }));
+      expect((await call('post', '/exports')).status).toBe(201);
+      expect(confirm).toHaveBeenCalledTimes(3);
+      expect(counted).toHaveBeenCalledTimes(1);
     });
 
-    it('holds with the request\'s Idempotency-Key, scoped to the workspace and metric, never the raw key', async () => {
+    it('never counts an unconfirmed gauge from a report: its count sets it', async () => {
+      snapshot = { metric: 'exports', used: 1, limit: 3, remaining: 2, percent_used: 0.33, policy: 'hard', kind: 'gauge', warningLevel: null, label: 'exports' };
+      confirm.mockRejectedValueOnce(new BridgeError('not-found', 'Not found', { status: 404 }));
+      expect((await call('post', '/exports')).status).toBe(201);
+      expect(counted).not.toHaveBeenCalled();
+    });
+
+    it('holds every request with a new decision made on the server, never from the client\'s Idempotency-Key', async () => {
       await call('post', '/exports').set('idempotency-key', 'abc-123');
-      const options = hold.mock.calls[0][2] as { decision: string };
-      expect(options.decision).toMatch(/^idem-[0-9a-f]{64}$/);
-      expect(options.decision).not.toContain('abc-123');
       await call('post', '/exports').set('idempotency-key', 'abc-123');
-      expect((hold.mock.calls[1][2] as { decision: string }).decision).toBe(options.decision);
+      const [first, second] = hold.mock.calls.map((each) => (each[2] as { decision: string }).decision);
+      expect(first).toMatch(/^hold-[0-9a-f-]{36}$/);
+      expect(second).toMatch(/^hold-[0-9a-f-]{36}$/);
+      expect(first).not.toBe(second);
+      expect(`${first}${second}`).not.toContain('abc-123');
+    });
+
+    it('names the metric the endpoint counts on the response outside production, on a 402 too', async () => {
+      const answer = await call('post', '/exports');
+      expect(answer.headers[USAGE_COUNTED_HEADER.toLowerCase()]).toBe('exports');
+      expect(answer.headers['access-control-expose-headers']).toContain(USAGE_COUNTED_HEADER);
+      hold.mockRejectedValueOnce(locked);
+      expect((await call('post', '/exports')).headers[USAGE_COUNTED_HEADER.toLowerCase()]).toBe('exports');
+      const was = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      try {
+        expect((await call('post', '/exports')).headers[USAGE_COUNTED_HEADER.toLowerCase()]).toBeUndefined();
+      } finally {
+        process.env.NODE_ENV = was;
+      }
     });
 
     it('in gauge mode sets the gauge to the handler\'s count after a 2xx, once the unit is confirmed', async () => {
@@ -359,7 +394,7 @@ describe('plan limit decorators', () => {
       const { quota, req } = asked();
       const held = await quota.hold(req, 'seats', { quantity: 2 });
       expect(held.metric).toBe('seats');
-      expect(hold).toHaveBeenCalledWith(actor, 'seats', { quantity: 2 });
+      expect(hold).toHaveBeenCalledWith(actor, 'seats', { quantity: 2, decision: expect.stringMatching(/^hold-/) });
     });
   });
 });

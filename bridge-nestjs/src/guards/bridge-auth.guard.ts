@@ -15,6 +15,7 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-flag.decorator';
 import { STRICT_KEY } from '../decorators/strict.decorator';
 import { featureRefusal, featureRefusalBody, unmetFlag } from '../flags/feature-refusal';
+import { billingLockedFrom } from '../quota/billing-locked';
 import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions, type FeatureFlagRequirement, type RouteRule } from '../options';
 import { graphqlFieldOf, graphqlIsMutation, pathOf, requestOf, routePathOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
 
@@ -217,7 +218,13 @@ export class BridgeAuthGuard implements CanActivate {
   }
 
   private refuse(context: ExecutionContext, error: unknown): never {
-    // Bridge's own refusals for a write (402 locked for payment, 403 workspace not active, 503 cannot be told): the problem as the body.
+    // A workspace locked for payment: 0.9's 402 body (`BILLING_GATE_ENGAGED`), with Bridge's problem beside it.
+    const locked = billingLockedFrom(error, this.options.manageRoute ?? BRIDGE_DEFAULTS.manageRoute);
+    if (locked !== null) {
+      this.log('Refused: the workspace is locked for payment', { status: 402, code: 'BILLING_GATE_ENGAGED' });
+      throw locked;
+    }
+    // Bridge's own other refusals for a write (403 workspace not active, 503 cannot be told): the problem as the body.
     if (isBridgeError(error) && error.problem !== null && [402, 403, 503].includes(error.status)) {
       this.log('Refused: the workspace cannot be written to', { status: error.status, code: error.code });
       if (error.status === 503) setHeader(context, 'Retry-After', '5');

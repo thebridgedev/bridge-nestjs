@@ -32,9 +32,8 @@ export {
  * when it fails or answers otherwise. A `metered` limit never refuses; the
  * overage is billed.
  *
- * - Counter (no `current`): the held unit is the count. A request's
- *   `Idempotency-Key` header makes a retry that arrives while the unit is
- *   still held reuse it.
+ * - Counter (no `current`): the held unit is the count. Every request holds
+ *   its own unit; a retry is a new request and counts again.
  * - Gauge (`current`): after a 2xx the gauge is set to your count.
  *
  * Needs a user verified by `BridgeAuthGuard` and the module's `appKey`. If

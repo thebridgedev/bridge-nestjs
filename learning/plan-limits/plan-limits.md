@@ -69,8 +69,8 @@ export class TicketsController {
 ## What happens on a request
 
 - **Before the handler:** Bridge holds one unit of the limit for this request (`402` when none is left). Two requests never get the last unit. A `metered` quota never refuses: past its allowance it bills per unit. A metric the plan has no quota for is unlimited.
-- **After the handler:** on a **2xx** response the unit counts, and a gauge is set to your count. A handler that throws or answers 4xx/5xx gives the unit back and records nothing. A handler that runs longer than 120 seconds loses its hold: it is logged and the response is unaffected.
-- **Retries:** a request with an `Idempotency-Key` header reuses the unit still held for that key, for that workspace and metric.
+- **After the handler:** on a **2xx** response the unit counts, and a gauge is set to your count. A handler that throws or answers 4xx/5xx gives the unit back and records nothing. A handler that runs longer than 120 seconds loses its hold: the unit is then counted from a usage report instead, once, it is logged, and the response is unaffected.
+- **Retries:** every request holds its own unit, so a retried request that succeeds counts again. The `Idempotency-Key` header is not used to count.
 - **Identity:** the workspace comes from the verified caller only. The route must be behind `BridgeAuthGuard` (or the global guard); a `@Public()` route has no workspace and gets `401`.
 - **Fail-closed:** if Bridge cannot answer, the request is refused with `503` (`QUOTA_UNAVAILABLE`).
 - **Counting needs the module's `appKey`.**
@@ -102,7 +102,7 @@ Who may use a feature is the flag; how many is the quota. An endpoint can carry 
 
 | Call | Does |
 |---|---|
-| `hold(req, metric, { quantity?, idempotencyKey? })` | Holds a unit and returns it: `confirm()` when the work happened, `giveBack()` when it did not. Refuses with the `402` above |
+| `hold(req, metric, { quantity? })` | Holds a unit and returns it: `confirm()` when the work happened, `giveBack()` when it did not. Refuses with the `402` above |
 | `check(req, metric, { current? })` | Decides without holding or refusing: `{ allowed, used, limit, quota }` |
 | `assertQuota(req, metric, { current? })` | The same check, refusing with the `402` above. Holds nothing |
 | `record(req, metric, { current? \| value?, idempotencyKey? })` | One write: a gauge set or a counter event; never throws |
@@ -116,7 +116,7 @@ A limit can also be a flag whose rule reads `bridge:billing.quota.<metric>.limit
 
 ## Workspaces that cannot write
 
-Separately from your decorators and flags, the guard refuses a signed-in person's writes (any method but `GET`, `HEAD` and `OPTIONS`) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402, `urn:bridge:problem:billing-locked`), and answers 503 while Bridge cannot tell. Reads are never refused for these reasons. There is nothing to add.
+Separately from your decorators and flags, the guard refuses a signed-in person's writes (any method but `GET`, `HEAD` and `OPTIONS`) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402 `BILLING_GATE_ENGAGED`, as above, with the problem `urn:bridge:problem:billing-locked` beside it), and answers 503 while Bridge cannot tell. Reads are never refused for these reasons. There is nothing to add.
 
 ## Exceptions: direct plan-feature checks
 

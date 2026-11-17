@@ -19,11 +19,10 @@
 // Identity only ever comes from the caller BridgeAuthGuard verified on this
 // request, never a header and never a raw token.
 
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Inject, Injectable, ForbiddenException, HttpException, HttpStatus, Logger, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import {
   entitlementFlag,
-  isBridgeError,
   isLimitReached,
   quotaExceededBody as limitBody,
   type Actor,
@@ -33,6 +32,9 @@ import {
 } from '@nebulr-group/bridge-auth-core/server';
 
 import { BridgeService } from '../bridge.service';
+import { billingLockedFrom } from './billing-locked';
+
+export { BillingLockedException, type BillingLockedBody } from './billing-locked';
 import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions } from '../options';
 
 /** Body of the 402 a request at its plan limit is refused with. */
@@ -56,15 +58,6 @@ export interface EntitlementRequiredBody {
   fix: string;
 }
 
-/** Body of the 402 a workspace locked for payment is refused with. */
-export interface BillingLockedBody {
-  statusCode: 402;
-  code: 'BILLING_GATE_ENGAGED';
-  message: string;
-  reason: 'billing_locked';
-  billing: { status: string; gateEngaged: true; recoveryUrl: string };
-  fix: string;
-}
 
 /** 402 Payment Required: Nest has no built-in exception for it. */
 export class QuotaExceededException extends HttpException {
@@ -79,12 +72,6 @@ export class EntitlementRequiredException extends ForbiddenException {
   }
 }
 
-/** 402 for a workspace locked for payment: it can be read, not changed, until it pays. */
-export class BillingLockedException extends HttpException {
-  constructor(public readonly body: BillingLockedBody) {
-    super(body, HttpStatus.PAYMENT_REQUIRED);
-  }
-}
 
 /** A gauge's current count: a number, or a function that counts. */
 export type QuotaCount = number | (() => number | Promise<number>);
@@ -113,13 +100,6 @@ export interface QuotaDecision {
 export interface QuotaHoldOptions {
   /** Units to hold. @default 1 */
   quantity?: number;
-  /**
-   * What the unit is held for: the client's idempotency key (typically its
-   * `Idempotency-Key` header). A retry that arrives while the unit is still
-   * held reuses it. Scoped to the verified workspace and the metric before it
-   * is sent. Leave out to hold a new unit each time.
-   */
-  idempotencyKey?: string;
 }
 
 export interface QuotaRecordOptions {
@@ -135,8 +115,6 @@ export interface QuotaRecordOptions {
   idempotencyKey?: string;
 }
 
-/** Where a workspace locked for payment is sent to pay, unless Bridge says another. */
-const LOCK_FIX = '/subscription';
 
 @Injectable()
 export class BridgeQuotaService {
@@ -208,7 +186,8 @@ export class BridgeQuotaService {
   /**
    * Hold one unit of `metric` for the work about to happen. Confirm the hold
    * when it happened and give it back when it did not; Bridge gives it back
-   * itself after 120 seconds.
+   * itself after 120 seconds. Each call is a new hold: a hold is never shared
+   * between requests, and never taken from a client header.
    *
    * Refuses with 402 `QUOTA_EXCEEDED` when a `hard` limit has nothing left, with
    * 402 `BILLING_GATE_ENGAGED` when the workspace is locked for payment, and
@@ -217,16 +196,18 @@ export class BridgeQuotaService {
   async hold(req: unknown, metric: string, opts: QuotaHoldOptions = {}): Promise<UsageHold> {
     const actor = this.actorFor(req);
     try {
+      // Every hold is its own decision, made here on the server: never taken from anything the client sent, so no two
+      // requests ever share a unit, and Bridge refuses a decision that held before.
       return await this.server.usage.hold(actor, metric, {
         ...(opts.quantity === undefined ? {} : { quantity: opts.quantity }),
-        ...(opts.idempotencyKey === undefined ? {} : { decision: this.idempotencyKeyFor(req, metric, opts.idempotencyKey) }),
+        decision: `hold-${randomUUID()}`,
       });
     } catch (error) {
       if (isLimitReached(error)) {
         this.logger.log(`Quota check failed: ${metric} ${String(error.quota.used)}/${String(error.quota.limit)}`);
         throw new QuotaExceededException({ ...limitBody(error, this.manageRoute) });
       }
-      const locked = this.lockedFrom(error);
+      const locked = billingLockedFrom(error, this.manageRoute);
       if (locked !== null) throw locked;
       throw this.unavailable(metric, error);
     }
@@ -259,6 +240,22 @@ export class BridgeQuotaService {
     } catch (error) {
       this.logger.warn(`Could not record "${metric}" after the request: ${error instanceof Error ? error.message : String(error)}`);
     }
+  }
+
+  /**
+   * Count a held unit whose confirm did not land: the work happened, but the
+   * hold was gone (the handler outlasted it) or Bridge never answered. A
+   * counter is reported under a one-time id of the hold, so it is counted
+   * once however often this runs; a gauge is left to its count. Never throws.
+   */
+  async countUnconfirmed(req: unknown, held: Pick<UsageHold, 'id' | 'metric'>): Promise<void> {
+    try {
+      const quota = await this.server.usage.quota(this.actorFor(req), held.metric);
+      if (quota?.kind === 'gauge') return;
+    } catch (error) {
+      this.logger.warn(`Could not read "${held.metric}" before counting an unconfirmed unit; counting it: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    await this.record(req, held.metric, { idempotencyKey: `hold-${held.id}` });
   }
 
   /** Set a gauge to the current count: the `@SyncQuota` call. Never throws. */
@@ -314,19 +311,6 @@ export class BridgeQuotaService {
     return `idem-${digest}`;
   }
 
-  /** A workspace locked for payment, as the 402 body says it; null for any other failure. */
-  private lockedFrom(error: unknown): BillingLockedException | null {
-    if (!isBridgeError(error) || error.status !== 402 || (error.code !== 'BILLING_GATE_ENGAGED' && error.code !== 'billing-locked')) return null;
-    const billing = (error as { payload?: { billing?: { status?: string; recoveryUrl?: string } } }).payload?.billing;
-    return new BillingLockedException({
-      statusCode: 402,
-      code: 'BILLING_GATE_ENGAGED',
-      message: 'Billing gate engaged — workspace access is locked',
-      reason: 'billing_locked',
-      billing: { status: billing?.status ?? 'past_due', gateEngaged: true, recoveryUrl: billing?.recoveryUrl ?? LOCK_FIX },
-      fix: this.manageRoute,
-    });
-  }
 
   private unavailable(metric: string, error: unknown): ServiceUnavailableException {
     this.logger.warn(`Quota could not be read, refusing (fail-closed) for "${metric}": ${error instanceof Error ? error.message : String(error)}`);
