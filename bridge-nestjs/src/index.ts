@@ -26,6 +26,9 @@ export * from './flags';
 // "Count this".
 export * from './usage';
 
+// Plan limits and entitlements.
+export * from './quota';
+
 // The management client.
 export * from './management';
 

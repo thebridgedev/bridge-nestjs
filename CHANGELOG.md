@@ -8,6 +8,10 @@
 - **A flag gate that is off because of the plan answers 402.** `@RequireFlag` answers 402 `FEATURE_NOT_IN_PLAN` when the flag's metadata says the plan is why (`why: "plan"`), with or without a plan feature named. The body is now also a problem (`type`, `title`, `status`, `detail`), `urn:bridge:problem:entitlement-missing` with `entitlement`, or `urn:bridge:problem:limit-reached` with `metric`, `limit` and `used` when Bridge says them. Every other reason stays 403 `FEATURE_OFF`.
 - **The flag results read for the workspace check are reused** by the route's flag gate, so a write asks Bridge for flags once.
 
+### Added
+
+- **Plan limits, as in 0.x: `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement` and `BridgeQuotaService`.** Same names, options and bodies: 402 `QUOTA_EXCEEDED` (`metric`, `used`, `limit`, `fix`), 403 `ENTITLEMENT_REQUIRED`, 503 `QUOTA_UNAVAILABLE`, and `BILLING_GATE_ENGAGED` for a workspace locked for payment. `@RequireQuota` now holds one unit before the handler runs, confirms it after a 2xx and gives it back on an error or a 4xx/5xx, so two requests never get the last unit; with `current` it also sets the gauge. `@SyncQuota` sets a gauge. `@RequireEntitlement` asks the flag `bridge:billing.entitlement.<key>`, never the plan. A confirm that finds the hold gone after 120 seconds is logged and never fails the response. Needs the `@nebulr-group/bridge-auth-core` alpha that adds `usage.hold`, `usage.set` and `usage.quota` (after 1.0.0-alpha.10). Differences from 0.x: a request's `Idempotency-Key` makes a retry reuse the unit while it is still held (not for ever); a gauge's limit is compared with Bridge's stored level, and your count sets it after a 2xx; `current` gets `{ id, userId, actor, request }` instead of a `TenantScope`; the dev-only `X-Bridge-Usage-Counted` header and the one-time `@RequireEntitlement` log note are gone; a key that acts in a workspace is counted too, where 0.x answered 401.
+
 ## [1.0.0-alpha.2] - 2026-11-12
 
 ### Added

@@ -1,6 +1,6 @@
 # Plan limits and entitlements
 
-A plan limit is one decorator on the handler that creates the thing. It checks the limit before the handler runs and records the use after it succeeds, so a POST increments the limit and there is nothing else to wire: no usage call after the insert, no counter table, no quota endpoint for the frontend.
+A plan limit is one decorator on the handler that creates the thing. It holds one unit of the limit before the handler runs and counts it after the handler succeeds, so a POST increments the limit and there is nothing else to wire: no usage call after the insert, no counter table, no quota endpoint for the frontend.
 
 The limit lives on your backend because anyone can call your API directly. The frontend only shows the decision: Bridge's frontend plugins open an upgrade dialog on the `402` this page describes, with no page code. The server is authoritative; the client is decorative.
 
@@ -29,8 +29,7 @@ In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a rout
 ```ts
 import { Controller, Delete, Param, Post } from '@nestjs/common';
 import {
-  BridgeTenant,
-  CurrentTenant,
+  CurrentActor,
   RequireQuota,
   SyncQuota,
 } from '@nebulr-group/bridge-nestjs';
@@ -43,15 +42,15 @@ export class TicketsController {
   // A gauge: tickets exist, so the app counts them.
   @Post()
   @RequireQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
-  create(@CurrentTenant() tenant: BridgeTenant) {
-    return this.tickets.create(tenant.id);
+  create(@CurrentActor('workspaceId') workspaceId: string) {
+    return this.tickets.create(workspaceId);
   }
 
   // Deleting one frees room: after a 2xx the gauge is set to the new count.
   @Delete(':id')
   @SyncQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
-  remove(@CurrentTenant() tenant: BridgeTenant, @Param('id') id: string) {
-    return this.tickets.remove(tenant.id, id);
+  remove(@CurrentActor('workspaceId') workspaceId: string, @Param('id') id: string) {
+    return this.tickets.remove(workspaceId, id);
   }
 
   // A counter: exports happen, so Bridge counts them.
@@ -63,17 +62,18 @@ export class TicketsController {
 }
 ```
 
-`current` receives the tenant (`t.id` is the verified workspace id; it is a `QuotaTenant`, so leave it unannotated or type it as `QuotaTenant`, not `BridgeTenant`) and the controller instance, so it can use the controller's services. Your count is what the limit is compared against, so Bridge's copy heals itself if it ever missed an update. There is no decrement and no reservation.
+`current` receives a `QuotaTenant` (`t.id` is the verified workspace id, `t.userId` the person, `t.actor` the verified caller) and the controller instance, so it can use the controller's services. After a 2xx the gauge is set to your count, so Bridge's copy heals itself if it ever missed an update. There is no decrement: every create and delete sends the whole count.
 
-**Seats** are a plan limit the app names, e.g. `seats`, set as a gauge counted from membership (`--kind gauge --source membership`). Bridge counts the workspace's active members, pending invites included. `@RequireQuota('seats')` on the app's own invite handler checks the limit and writes nothing; Bridge's own invite API does not refuse at the limit.
+**Seats** are a plan limit the app names, e.g. `seats`, set as a gauge counted from membership (`--kind gauge --source membership`). Bridge counts the workspace's active members, pending invites included, so the app does not pass `current` for it.
 
 ## What happens on a request
 
-- **Before the handler:** the quota is checked (`402` at the limit). A `metered` quota never refuses — past its allowance it bills per unit. A metric the plan has no quota for is unlimited.
-- **After the handler:** only on a **2xx** response, exactly one write to Bridge per decorated metric. A handler that throws or answers 4xx/5xx records nothing.
-- **Retries:** a counter request with an `Idempotency-Key` header counts once per key for that workspace and metric.
-- **Identity:** the workspace comes from the verified token only. The route must be behind `BridgeAuthGuard` (or the global guard); a `@Public()` route has no workspace and gets `401`.
-- **Fail-closed:** if Bridge cannot answer the quota read, the request is refused with `503`.
+- **Before the handler:** Bridge holds one unit of the limit for this request (`402` when none is left). Two requests never get the last unit. A `metered` quota never refuses: past its allowance it bills per unit. A metric the plan has no quota for is unlimited.
+- **After the handler:** on a **2xx** response the unit counts, and a gauge is set to your count. A handler that throws or answers 4xx/5xx gives the unit back and records nothing. A handler that runs longer than 120 seconds loses its hold: it is logged and the response is unaffected.
+- **Retries:** a request with an `Idempotency-Key` header reuses the unit still held for that key, for that workspace and metric.
+- **Identity:** the workspace comes from the verified caller only. The route must be behind `BridgeAuthGuard` (or the global guard); a `@Public()` route has no workspace and gets `401`.
+- **Fail-closed:** if Bridge cannot answer, the request is refused with `503` (`QUOTA_UNAVAILABLE`).
+- **Counting needs the module's `appKey`.**
 
 The refusal your frontend reads:
 
@@ -82,7 +82,9 @@ The refusal your frontend reads:
   "metric": "tickets", "used": 5, "limit": 5, "fix": "/subscription" }
 ```
 
-`fix` is the app's subscription page; change it with `BridgeModule.forRoot({ billing: { manageRoute: '/account/billing' } })`.
+`fix` is the app's subscription page; change it with `BridgeModule.forRoot({ manageRoute: '/account/billing' })`.
+
+A workspace locked for payment is refused as it was before: `402 { "code": "BILLING_GATE_ENGAGED", "reason": "billing_locked", "billing": { "status": "past_due", "gateEngaged": true, "recoveryUrl": "/subscription" } }`. Reads are never refused for this reason.
 
 ## Plan features — a flag
 
@@ -92,9 +94,7 @@ list the feature on the plans that sell it (`bridge plan feature add pro analyti
 or controller. A workspace without it gets `402 FEATURE_NOT_IN_PLAN` with the upgrade route in `fix`.
 
 Who may use a feature is the flag; how many is the quota. An endpoint can carry both:
-`@RequireFeatureFlag('exports-enabled')` and `@RequireQuota('exports')`. Every hard quota is also a plan
-feature of its own name that turns false at the cap, so do not rule the flag on the same metric the quota
-counts: at the cap the flag would refuse before the quota answers the `402` the frontend upsells from.
+`@RequireFeatureFlag('exports-enabled')` and `@RequireQuota('exports')`.
 
 ## Without decorators
 
@@ -102,22 +102,29 @@ counts: at the cap the flag would refuse before the quota answers the `402` the 
 
 | Call | Does |
 |---|---|
-| `check(req, metric, { current? })` | Decides without refusing: `{ allowed, used, limit, quota }` |
-| `assertQuota(req, metric, { current? })` | Refuses with the `402` above |
+| `hold(req, metric, { quantity?, idempotencyKey? })` | Holds a unit and returns it: `confirm()` when the work happened, `giveBack()` when it did not. Refuses with the `402` above |
+| `check(req, metric, { current? })` | Decides without holding or refusing: `{ allowed, used, limit, quota }` |
+| `assertQuota(req, metric, { current? })` | The same check, refusing with the `402` above. Holds nothing |
 | `record(req, metric, { current? \| value?, idempotencyKey? })` | One write: a gauge set or a counter event; never throws |
 | `sync(req, metric, current)` | Sets the gauge (what `@SyncQuota` does) |
 
-At the lowest level, `bridge.fromRequest(req).usage` has `quota(metric)`, `report(metric, n, key)` and `set(metric, count)` — see [BridgeService](../bridge-service/bridge-service.md).
+At the lowest level, `BridgeService.count(actor, metric, n)` counts and `BridgeQuotaService` wraps the same calls auth-core's server has: `usage.hold`, `usage.set` and `usage.quota`.
 
-## Exceptions — direct plan-feature checks
+## The same limit as a flag
+
+A limit can also be a flag whose rule reads `bridge:billing.quota.<metric>.limit`, gated with `@RequireFlag` and counted with `@Meter`; it refuses with `402 FEATURE_NOT_IN_PLAN`. `@RequireQuota` is the one decorator that holds, counts and answers the `QUOTA_EXCEEDED` body your frontend's upgrade dialog reads, so use one or the other for a metric, not both.
+
+## Workspaces that cannot write
+
+Separately from your decorators and flags, the guard refuses a signed-in person's writes (any method but `GET`, `HEAD` and `OPTIONS`) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402, `urn:bridge:problem:billing-locked`), and answers 503 while Bridge cannot tell. Reads are never refused for these reasons. There is nothing to add.
+
+## Exceptions: direct plan-feature checks
 
 For the rare case where the developer explicitly asks for no flag: `@RequireEntitlement('analytics')` on a
 handler or controller, or `BridgeQuotaService.assertEntitlement(req, key)`, refuses with
-`403 { "code": "ENTITLEMENT_REQUIRED", "entitlement": "…", "fix": "/subscription" }`. Outside production,
-`@RequireEntitlement` logs a one-time note naming the flag rule to use instead.
+`403 { "code": "ENTITLEMENT_REQUIRED", "entitlement": "…", "fix": "/subscription" }`. It asks the flag
+`bridge:billing.entitlement.analytics`, so it never reads the plan itself.
 
 ## Count once, where the action happens
 
-When the click calls this backend, the handler counts it — `@RequireQuota` / `@SyncQuota` above — and the frontend only shows the number. When an action never reaches a server (a local-first or mobile app), Bridge's frontend plugins count it themselves (`bridge.usage.report()` / `bridge.usage.set()` in bridge-svelte); that is first-class, and it trusts the browser.
-
-Never both: the same action would be counted twice. Outside production (`NODE_ENV` is not `production`), every response from a counting endpoint — a 2xx or the `402` refusal — carries `X-Bridge-Usage-Counted: <metric>` (and adds it to `Access-Control-Expose-Headers`), and bridge-svelte warns once in the browser console, in development, when the page also reports that metric. In production the header is never sent.
+When the click calls this backend, the handler counts it, with `@RequireQuota` / `@SyncQuota` above, and the frontend only shows the number. Never count the same action in two places: it would be counted twice.

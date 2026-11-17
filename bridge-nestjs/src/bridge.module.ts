@@ -4,11 +4,13 @@ import { createBridgeServer, type BridgeServer } from '@nebulr-group/bridge-auth
 import { BridgeService } from './bridge.service';
 import { BridgeAuthGuard } from './guards/bridge-auth.guard';
 import { BridgeManagementService } from './management/management.service';
+import { BridgeQuotaInterceptor } from './quota/quota.interceptor';
+import { BridgeQuotaService } from './quota/quota.service';
 import { BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleAsyncOptions, type BridgeModuleOptions } from './options';
 import { BridgeMeterInterceptor } from './usage/meter';
 import { BridgeWebhookGuard } from './webhooks/webhook.guard';
 
-const EXPORTS = [BRIDGE_OPTIONS, BRIDGE_SERVER, BridgeService, BridgeAuthGuard, BridgeManagementService, BridgeMeterInterceptor, BridgeWebhookGuard];
+const EXPORTS = [BRIDGE_OPTIONS, BRIDGE_SERVER, BridgeService, BridgeAuthGuard, BridgeManagementService, BridgeMeterInterceptor, BridgeQuotaService, BridgeQuotaInterceptor, BridgeWebhookGuard];
 
 /**
  * Settings not given are read from the environment: `BRIDGE_ISSUER`,
@@ -87,6 +89,6 @@ export class BridgeModule {
   }
 
   private static common(): Provider[] {
-    return [BridgeService, BridgeAuthGuard, BridgeManagementService, BridgeMeterInterceptor, BridgeWebhookGuard];
+    return [BridgeService, BridgeAuthGuard, BridgeManagementService, BridgeMeterInterceptor, BridgeQuotaService, BridgeQuotaInterceptor, BridgeWebhookGuard];
   }
 }
