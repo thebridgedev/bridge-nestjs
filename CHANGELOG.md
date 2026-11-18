@@ -1,9 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-alpha.3] - 2026-11-18
 
 ### Changed
 
+- Uses `@nebulr-group/bridge-auth-core` 1.0.0-alpha.11 (pinned), which carries the workspace write gate and plan limits below.
 - **A person's write in a workspace that is not active or is locked for payment is refused.** The guard hands the request method to auth-core, which refuses the write: 403 for a suspended or deletion-scheduled workspace, 402 for one locked for payment, 503 (with `Retry-After`) while Bridge cannot tell. The body is the problem (`urn:bridge:problem:workspace-not-active`, `urn:bridge:problem:unavailable`), never a 500. A workspace locked for payment is answered with 0.9's body, `402 { code: "BILLING_GATE_ENGAGED", reason: "billing_locked", billing, fix }`, with the problem `urn:bridge:problem:billing-locked` beside it, on every route: plain, `@RequireFlag` or `@RequireQuota`. A GraphQL query is a read; only a mutation is a write. Reads and `@Public()` routes are not affected. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.10; with an older one the guard behaves as before.
 - **A flag gate that is off because of the plan answers 402.** `@RequireFlag` answers 402 `FEATURE_NOT_IN_PLAN` when the flag's metadata says the plan is why (`why: "plan"`), with or without a plan feature named. The body is now also a problem (`type`, `title`, `status`, `detail`), `urn:bridge:problem:entitlement-missing` with `entitlement`, or `urn:bridge:problem:limit-reached` with `metric`, `limit` and `used` when Bridge says them. Every other reason stays 403 `FEATURE_OFF`.
 - **The flag results read for the workspace check are reused** by the route's flag gate, so a write asks Bridge for flags once.
