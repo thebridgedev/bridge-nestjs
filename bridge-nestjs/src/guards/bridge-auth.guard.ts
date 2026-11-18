@@ -193,7 +193,9 @@ export class BridgeAuthGuard implements CanActivate {
     let flags: Promise<FlagSet> | null = null;
     const readFlags = (): Promise<FlagSet> => {
       // Flags are read for the caller that checked out, a person or a key, never with a credential that failed its check.
-      flags ??= actor === null ? Promise.resolve(new FlagSet()) : checked !== null ? Promise.resolve(checked) : this.server.flags.forRequest(credentials as RequestLike);
+      // With no caller (an open route nobody signed in to, or one whose credential failed) Bridge answers as it does for
+      // any visitor: public flags only, with no credential sent. The route's own key is never used for a stranger.
+      flags ??= actor === null ? this.server.flags.forVisitor() : checked !== null ? Promise.resolve(checked) : this.server.flags.forRequest(credentials as RequestLike);
       return flags;
     };
     setBridgeState(request, { actor, flags: readFlags });

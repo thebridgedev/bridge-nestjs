@@ -78,6 +78,20 @@ status() { … }
 
 The Actor has no role and no privileges on purpose: gate with a flag.
 
+**Flags on a public route.** A route nobody signed in to (`@Public()`) still reads flags. Bridge answers as it does for any visitor: the flags you marked **public** in Control Center, and nothing else. A flag you did not mark public is absent, so `@RequireFlag` on it refuses (`403 FEATURE_OFF`) and `@Flag(key, fallback)` gives its fallback. Nothing is sent with the question, so your app key never speaks for a stranger. The same goes for a credential that does not check out on a public route. A person or a key that does check out gets its own results, as on any route.
+
+```ts
+@Public()
+@RequireFlag('signup-banner')   // a public flag: visible without signing in
+@Get('banner')
+banner() { … }
+
+@Public()
+@Get('home')
+home(@Flag('home-hero', 'classic') hero: string) { … }
+```
+
+For code with no request (a job, a startup task), `BridgeService.visitorFlags({ country: 'SE' })` gives the same results. What you pass are facts your server knows; never pass what the caller sent as a fact. An answer is kept for ten seconds per set of facts, so a busy public route does not ask Bridge each time. While Bridge cannot answer, every flag gives its fallback and the route is still served. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
 
 ## Every gate is a flag
 
@@ -222,7 +236,7 @@ receive(@WebhookEvent() event: BridgeWebhookEvent) {
 | `JwksService`, `TokenVerificationError`, `ApiTokenClaims` | `BridgeService.verify(request)`, `BridgeError` |
 | `BridgeService.fromJwt(jwt)`, `TenantScope` | `BridgeService` for the caller; `BridgeManagementService` for workspaces, members, billing |
 | `BridgeHttpService` | `BridgeManagementService` |
-| `@nebulr-group/bridge-nestjs/flags`, `BridgeFlagsModule`, `BridgeFlagsService` | `@RequireFlag`, `@Flag`, `@Flags`, `BridgeService.flags()` |
+| `@nebulr-group/bridge-nestjs/flags`, `BridgeFlagsModule`, `BridgeFlagsService` | `@RequireFlag`, `@Flag`, `@Flags`, `BridgeService.flags()`. For a caller who is not signed in: public flags, on `@Public()` routes and with `BridgeService.visitorFlags()`. Flags are evaluated by Bridge, not in your process |
 
 ## Licence
 

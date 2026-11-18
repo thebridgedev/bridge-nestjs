@@ -44,14 +44,28 @@ export class BridgeService implements OnModuleDestroy {
   }
 
   /**
-   * The caller's flag results, worked out by Bridge for the person whose token
-   * came with the request. Without a person's token every flag gives its
-   * fallback. Read once per request when the guard ran.
+   * The caller's flag results, worked out by Bridge for the person or key
+   * whose credential came with the request. A request nobody signed in to
+   * (a public route) gets what Bridge shows any visitor: the flags marked
+   * public, and every other flag gives its fallback. Read once per request
+   * when the guard ran.
    */
   flags(request: RequestLike, hints: Readonly<Record<string, Hint>> = {}): Promise<FlagSet> {
     const state = bridgeStateOf(request);
     if (state !== undefined && Object.keys(hints).length === 0) return state.flags();
+    if (state !== undefined && state.actor === null) return this.server.flags.forVisitor(hints);
     return this.server.flags.forRequest(request, hints);
+  }
+
+  /**
+   * The flag results Bridge gives a visitor: public flags only, asked with no
+   * credential. For code with no request, or a route the guard does not cover.
+   * `hints` are facts your server knows; never pass what the visitor sent as
+   * a fact. A flag you have not marked public is absent, so it gives its
+   * fallback.
+   */
+  visitorFlags(hints: Readonly<Record<string, Hint>> = {}): Promise<FlagSet> {
+    return this.server.flags.forVisitor(hints);
   }
 
   /** Whether a boolean flag is on for the caller. Off unless Bridge said on. */
