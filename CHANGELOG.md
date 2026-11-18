@@ -8,6 +8,7 @@
 
 ### Added
 
+- **Usage that survives a crash or a restart.** The module takes `usageStore` (and `maxQueuedReports`, `maxQueuedAgeMs`), passed to auth-core: `fileUsageQueue({ dir })` from `@nebulr-group/bridge-auth-core/server/node` keeps counted usage in a journal on disk, as 0.x did, or give a store of your own with `load`, `add` and `remove`. At start what waited is sent with the ids it was counted with, so a report sent just before the crash and sent again counts once. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
 - **Keys pass flag gates by their privileges.** The guard asks Bridge for the flags of the key that made the request, as it does for a person. A key whose privileges match the flag's rule passes `@RequireFlag`; any other key gets `403 FEATURE_OFF`. In 1.0.0-alpha.1 to alpha.3 a call with a key got every flag's fallback. Needs the `@nebulr-group/bridge-auth-core` alpha that sends the key when it evaluates flags (the alpha that follows 1.0.0-alpha.11); with an older one a key still gets every flag's fallback, so a gated route refuses it.
 
 ## [1.0.0-alpha.3] - 2026-11-18

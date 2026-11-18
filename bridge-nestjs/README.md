@@ -78,6 +78,7 @@ status() { … }
 
 The Actor has no role and no privileges on purpose: gate with a flag.
 
+
 ## Every gate is a flag
 
 ```ts
@@ -128,6 +129,8 @@ create() { … }
 ```
 
 Once the handler succeeds, Bridge counts one for the caller's workspace. Counts are sent in batches every few seconds and resent with the same ids, so nothing is counted twice. A limit on a count is a flag rule (`tickets-create` off once the plan's number is reached): the code only counts. `BridgeService.count(actor, metric, n)` counts by hand.
+
+Usage waits in memory until it is sent. To keep it through a crash or a restart, give the module a store: `usageStore: fileUsageQueue({ dir: '/var/lib/my-app/bridge-usage' })` from `@nebulr-group/bridge-auth-core/server/node`, or one of your own with `load`, `add` and `remove`. Each report keeps its id, so one that went out just before the crash and goes out again counts once; one that has waited longer than `maxQueuedAgeMs` (30 days by default, at most 34) is dropped and logged, as Bridge keeps ids for 35 days. One process owns one directory. On a platform whose disk does not outlive the process, use a store that writes to something that does. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
 
 A flag gate that is off because the plan is why (a plan feature the workspace lacks, or a limit that is used up) answers 402 `FEATURE_NOT_IN_PLAN` with an RFC 9457 problem body (`urn:bridge:problem:entitlement-missing` or `urn:bridge:problem:limit-reached`), never 403; any other reason stays 403 `FEATURE_OFF`.
 
