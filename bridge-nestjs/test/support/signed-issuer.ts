@@ -110,7 +110,12 @@ export async function createSignedIssuer() {
     if (method === 'POST' && path === '/v2/flags/ofrep/v1/evaluate/flags') {
       const claims = claimsOf(request.headers.get('authorization'));
       if (claims === null) return json({ type: 'urn:bridge:problem:signed-out', status: 401 }, 401);
-      return json({ flags: flagResults.get(String(claims.sub)) ?? flagResults.get('*') ?? [] });
+      // Bridge always answers the two workspace flags a write is checked on; a test that sets them itself wins.
+      const given = (flagResults.get(String(claims.sub)) ?? flagResults.get('*') ?? []) as { key: string }[];
+      const workspace = ['bridge-workspace-active', 'bridge-workspace-paid']
+        .filter((key) => !given.some((result) => result.key === key))
+        .map((key) => ({ key, value: true, reason: 'STATIC' }));
+      return json({ flags: [...given, ...workspace] });
     }
     if (method === 'POST' && path === '/v2/billing/usage') {
       if (request.headers.get('x-api-key') === null) return json({ status: 401 }, 401);

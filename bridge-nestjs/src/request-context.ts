@@ -60,6 +60,16 @@ export function graphqlFieldOf(context: ExecutionContext): string | null {
 }
 
 /**
+ * Whether a GraphQL call changes things: the operation the server parsed is a mutation. A query is a read even
+ * though it travels in a POST. Null for other transports.
+ */
+export function graphqlIsMutation(context: ExecutionContext): boolean | null {
+  if (context.getType<string>() !== 'graphql') return null;
+  const info = context.getArgByIndex(3) as { operation?: { operation?: unknown } } | undefined;
+  return info?.operation?.operation === 'mutation';
+}
+
+/**
  * The route the HTTP router resolved for this request, as it was declared
  * (`/beta`, `/users/:id`, with any global prefix): Express's `request.route`,
  * Fastify's `routeOptions.url`. Whatever case, slashes or escapes the client

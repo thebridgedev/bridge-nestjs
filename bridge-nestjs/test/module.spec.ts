@@ -145,6 +145,14 @@ describe('BridgeModule against a signing issuer', () => {
       expect((await request(app.getHttpServer()).post('/relaxed').set('authorization', `Bearer ${token}`)).status).toBe(201);
     });
 
+    it('refuses a write 402 when the workspace is locked for payment, and still serves reads', async () => {
+      issuer.setFlags('user-alice', [{ key: 'bridge-workspace-paid', value: false, metadata: { access: 'blocked' } }]);
+      const write = await request(app.getHttpServer()).post('/notes').set('authorization', `Bearer ${token}`).send({ a: 1 });
+      expect(write.status).toBe(402);
+      expect(write.body).toMatchObject({ type: 'urn:bridge:problem:billing-locked' });
+      expect((await get('/me', token)).status).toBe(200);
+    });
+
     it('answers 503 for reads too, never yes, once the list falls behind maxLagMs', async () => {
       await app.close();
       app = await startApp(issuer, { strictLagMs: 100, maxLagMs: 300 });
@@ -171,6 +179,13 @@ describe('BridgeModule against a signing issuer', () => {
       const answer = await get('/reports', token);
       expect(answer.status).toBe(402);
       expect(answer.body).toMatchObject({ code: 'FEATURE_NOT_IN_PLAN', flag: 'reports', feature: 'reports', fix: '/subscription' });
+    });
+
+    it('answers 402 when the flag says the plan is why, with or without a plan feature named', async () => {
+      issuer.setFlags('user-alice', [{ key: 'reports', value: false, reason: 'TARGETING_MATCH', metadata: { why: 'plan' } }]);
+      const answer = await get('/reports', token);
+      expect(answer.status).toBe(402);
+      expect(answer.body).toMatchObject({ code: 'FEATURE_NOT_IN_PLAN', flag: 'reports', status: 402 });
     });
 
     it('answers 403 FEATURE_OFF otherwise, and when Bridge gave no result', async () => {

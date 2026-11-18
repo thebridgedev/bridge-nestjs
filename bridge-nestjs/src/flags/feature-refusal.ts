@@ -5,8 +5,11 @@ import type { FeatureFlagRequirement } from '../options';
 /**
  * Why a flag-gated endpoint refused:
  *
- *   402 FEATURE_NOT_IN_PLAN — a plan feature is what keeps the flag off: an upgrade would turn it on
+ *   402 FEATURE_NOT_IN_PLAN — the plan is what keeps the flag off (a plan feature the workspace lacks, or a plan
+ *                             limit that is used up): an upgrade would turn it on
  *   403 FEATURE_OFF         — anything else: the rule, a rollout, switched off, or Bridge could not answer
+ *
+ * A 402 is also an RFC 9457 problem (`type`, `title`, `status`, `detail`), the shape Bridge's own refusals have.
  */
 export type FeatureRefusalCode = 'FEATURE_NOT_IN_PLAN' | 'FEATURE_OFF';
 
@@ -14,11 +17,24 @@ export interface FeatureRefusalBody {
   statusCode: 402 | 403;
   code: FeatureRefusalCode;
   error: 'Payment Required' | 'Forbidden';
+  /** For a 402, the problem's type: `urn:bridge:problem:entitlement-missing` (a plan feature) or `urn:bridge:problem:limit-reached` (a plan limit). */
+  type?: string;
+  title?: string;
+  status?: 402;
+  detail?: string;
+  /** For a 402 about a plan limit, when Bridge says: what was counted, the limit and what is used. */
+  metric?: string;
+  limit?: number;
+  used?: number;
   message: string;
+  /** For a 402 about a plan limit: `limit_reached`. */
+  reason?: 'limit_reached';
   /** The flag that was off. */
   flag: string;
   /** The plan feature the flag's rule needs, for a 402. */
   feature?: string;
+  /** The same plan feature under the problem's own name, for a 402 about a missing plan feature. */
+  entitlement?: string;
   /** Bridge's own words for which part of the rule decided, when it says. */
   why?: string;
   /** What the caller can do about it. */
@@ -30,14 +46,28 @@ export const DEFAULT_MANAGE_ROUTE = '/subscription';
 /** The refusal for a flag that is off, from the reason Bridge gave. */
 export function featureRefusalBody(flags: FlagSet, flag: string, manageRoute: string = DEFAULT_MANAGE_ROUTE): FeatureRefusalBody {
   const reason = flags.reason(flag);
-  if (reason.entitlement !== null) {
+  // The plan is why: a plan feature is missing (the entitlement), or a limit the plan sets has nothing left.
+  if (reason.entitlement !== null || reason.why === 'plan') {
+    const result = flags.all().get(flag);
+    const metadata = (result !== undefined && 'metadata' in result ? result.metadata : undefined) ?? {};
+    const message =
+      reason.entitlement !== null ? `Your plan does not include '${reason.entitlement}'. Upgrade to use it.` : 'Your plan does not allow this. Upgrade to use it.';
+    const metric = typeof metadata['metric'] === 'string' ? metadata['metric'] : undefined;
     return {
       statusCode: 402,
       code: 'FEATURE_NOT_IN_PLAN',
       error: 'Payment Required',
-      message: `Your plan does not include '${reason.entitlement}'. Upgrade to use it.`,
+      type: reason.entitlement !== null ? 'urn:bridge:problem:entitlement-missing' : 'urn:bridge:problem:limit-reached',
+      title: 'Payment required',
+      status: 402,
+      detail: message,
+      ...(reason.entitlement === null ? { reason: 'limit_reached' } : {}),
+      ...(metric === undefined ? {} : { metric }),
+      ...(typeof metadata['limit'] === 'number' ? { limit: metadata['limit'] } : {}),
+      ...(typeof metadata['used'] === 'number' ? { used: metadata['used'] } : {}),
+      message,
       flag,
-      feature: reason.entitlement,
+      ...(reason.entitlement === null ? {} : { feature: reason.entitlement, entitlement: reason.entitlement }),
       ...(reason.why === null ? {} : { why: reason.why }),
       fix: manageRoute || DEFAULT_MANAGE_ROUTE,
     };

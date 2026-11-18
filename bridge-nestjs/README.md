@@ -117,6 +117,34 @@ create() { … }
 
 Once the handler succeeds, Bridge counts one for the caller's workspace. Counts are sent in batches every few seconds and resent with the same ids, so nothing is counted twice. A limit on a count is a flag rule (`tickets-create` off once the plan's number is reached): the code only counts. `BridgeService.count(actor, metric, n)` counts by hand.
 
+A flag gate that is off because the plan is why (a plan feature the workspace lacks, or a limit that is used up) answers 402 `FEATURE_NOT_IN_PLAN` with an RFC 9457 problem body (`urn:bridge:problem:entitlement-missing` or `urn:bridge:problem:limit-reached`), never 403; any other reason stays 403 `FEATURE_OFF`.
+
+**Writes in a workspace that cannot write.** The guard refuses a signed-in person's write (any method but `GET`, `HEAD` and `OPTIONS`; for GraphQL, a mutation) while their workspace is suspended or scheduled for deletion (403, `urn:bridge:problem:workspace-not-active`) or locked for payment (402 `BILLING_GATE_ENGAGED`, as in 0.9, with the problem `urn:bridge:problem:billing-locked` beside it), and with 503 and `Retry-After` while Bridge cannot tell. The body is the problem. Reads are never refused for these reasons, a `@Public()` route is not affected, and keys are unchanged. Needs `@nebulr-group/bridge-auth-core` 1.0.0-alpha.11 or later.
+
+## Plan limits
+
+```ts
+@Post('tickets')
+@RequireQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
+create() { … }
+
+@Delete('tickets/:id')
+@SyncQuota('tickets', { current: (t, self: TicketsController) => self.tickets.countFor(t.id) })
+remove() { … }
+
+@Post('reports/export')
+@RequireQuota('exports')
+export() { … }
+
+@RequireEntitlement('analytics')
+@Get('analytics')
+analytics() { … }
+```
+
+`@RequireQuota` holds one unit of the plan's limit before the handler runs, counts it when the handler answers 2xx and gives it back when it fails, so two requests never get the last unit. At the limit the answer is `402 QUOTA_EXCEEDED` (`metric`, `used`, `limit`, `fix`); a workspace locked for payment gets `402 BILLING_GATE_ENGAGED`; if Bridge cannot answer, `503 QUOTA_UNAVAILABLE`. With `current` (a gauge: tickets, projects) the gauge is set to your count after a 2xx; without it (a counter: exports, calls) the held unit is the count, and every request holds its own. `@SyncQuota` sets a gauge after a delete. A `metered` limit never refuses; the overage is billed. Needs `appKey`.
+
+`@RequireEntitlement(key)` refuses with `403 ENTITLEMENT_REQUIRED` unless the plan includes the feature; it asks the flag `bridge:billing.entitlement.<key>`. `BridgeQuotaService` does the same as plain calls: `hold`, `check`, `assertQuota`, `record`, `sync`, `assertEntitlement`.
+
 ## Management client
 
 `BridgeManagementService` calls Bridge's API with your app key:
@@ -174,8 +202,7 @@ receive(@WebhookEvent() event: BridgeWebhookEvent) {
 | `RouteRule.privilege`, `guard.global`, `guard.defaultAccess`, `@Public()`, `@AcceptAuth()` | Unchanged |
 | A rule's `graphqlOperation` | `graphqlField: 'Query.field'`, or a decorator on the resolver. The module refuses to start with `graphqlOperation` |
 | A rule's `path` matched against the URL | Matched against the declared route: write it as declared (`/users/*` or `/users/:id`), not as a concrete URL |
-| `@RequireQuota`, `@SyncQuota`, `BridgeQuotaService` | A flag rule for the limit with `@RequireFlag`, and `@Meter` to count |
-| `@RequireEntitlement` | A flag whose rule names the plan feature |
+| `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement`, `BridgeQuotaService` | Unchanged. `current` gets `{ id, userId, actor, request }` (no `scope`), and `@RequireEntitlement` asks the flag `bridge:billing.entitlement.<key>` |
 | `FeatureForbiddenException` with `FEATURE_NOT_PERMITTED` | `FEATURE_OFF` (402 `FEATURE_NOT_IN_PLAN` is unchanged) |
 | `JwksService`, `TokenVerificationError`, `ApiTokenClaims` | `BridgeService.verify(request)`, `BridgeError` |
 | `BridgeService.fromJwt(jwt)`, `TenantScope` | `BridgeService` for the caller; `BridgeManagementService` for workspaces, members, billing |

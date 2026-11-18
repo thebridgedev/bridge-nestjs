@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  HttpException,
   Inject,
   Injectable,
   Logger,
@@ -8,16 +9,20 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { FlagSet, isBridgeError, type Actor, type BridgeServer, type RequestLike } from '@nebulr-group/bridge-auth-core/server';
+import { FlagSet, isBridgeError, type Actor, type BridgeError, type BridgeServer, type RequestLike } from '@nebulr-group/bridge-auth-core/server';
 import { ACCEPT_AUTH_KEY, type AuthType } from '../decorators/accept-auth.decorator';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-flag.decorator';
 import { STRICT_KEY } from '../decorators/strict.decorator';
 import { featureRefusal, featureRefusalBody, unmetFlag } from '../flags/feature-refusal';
+import { billingLockedFrom } from '../quota/billing-locked';
 import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions, type FeatureFlagRequirement, type RouteRule } from '../options';
-import { graphqlFieldOf, pathOf, requestOf, routePathOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
+import { graphqlFieldOf, graphqlIsMutation, pathOf, requestOf, routePathOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
 
 const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** What auth-core's check answers: an Actor, or the refusal. `flags` are the results it read for a write. */
+type CheckedRequest = { ok: true; actor: Actor; flags?: FlagSet } | { ok: false; error: BridgeError };
 
 /** A path as the router compares it: no repeated or trailing slash. */
 function tidy(path: string): string {
@@ -148,6 +153,7 @@ export class BridgeAuthGuard implements CanActivate {
     const strict = this.metadata<boolean>(STRICT_KEY, context) ?? ((this.options.guard?.strictWrites ?? BRIDGE_DEFAULTS.strictWrites) && WRITES.has(method));
 
     let actor: Actor | null = null;
+    let checked: FlagSet | null = null;
     if (credentials === null) {
       if (!open) {
         this.log('Refused: no credential', { method, path: pathOf(request) });
@@ -155,9 +161,15 @@ export class BridgeAuthGuard implements CanActivate {
         throw new UnauthorizedException({ statusCode: 401, error: 'Unauthorized', message: this.missingMessage(accepted) });
       }
     } else {
-      const result = await this.server.check(credentials, { strict });
+      // The method lets auth-core refuse a person's write in a workspace that is not active or is locked for payment.
+      // A GraphQL query travels in a POST but only reads: only a mutation is a write.
+      const writeMethod = graphqlIsMutation(context) === null ? method : graphqlIsMutation(context) ? 'POST' : 'GET';
+      const withMethod: RequestLike & { method?: string } = { headers: credentials.headers, method: writeMethod };
+      const result: CheckedRequest = await this.server.check(withMethod, { strict });
       if (result.ok) {
         actor = result.actor;
+        // Read for the workspace check on a write: a gate on this request uses it, not a second call.
+        checked = result.flags ?? null;
       } else if (!open) {
         this.refuse(context, result.error);
       } else {
@@ -169,7 +181,7 @@ export class BridgeAuthGuard implements CanActivate {
     let flags: Promise<FlagSet> | null = null;
     const readFlags = (): Promise<FlagSet> => {
       // Flags are read with the person's token only, never with a credential that failed its check.
-      flags ??= actor === null ? Promise.resolve(new FlagSet()) : this.server.flags.forRequest(credentials as RequestLike);
+      flags ??= actor === null ? Promise.resolve(new FlagSet()) : checked !== null ? Promise.resolve(checked) : this.server.flags.forRequest(credentials as RequestLike);
       return flags;
     };
     setBridgeState(request, { actor, flags: readFlags });
@@ -206,6 +218,18 @@ export class BridgeAuthGuard implements CanActivate {
   }
 
   private refuse(context: ExecutionContext, error: unknown): never {
+    // A workspace locked for payment: 0.9's 402 body (`BILLING_GATE_ENGAGED`), with Bridge's problem beside it.
+    const locked = billingLockedFrom(error, this.options.manageRoute ?? BRIDGE_DEFAULTS.manageRoute);
+    if (locked !== null) {
+      this.log('Refused: the workspace is locked for payment', { status: 402, code: 'BILLING_GATE_ENGAGED' });
+      throw locked;
+    }
+    // Bridge's own other refusals for a write (403 workspace not active, 503 cannot be told): the problem as the body.
+    if (isBridgeError(error) && error.problem !== null && [402, 403, 503].includes(error.status)) {
+      this.log('Refused: the workspace cannot be written to', { status: error.status, code: error.code });
+      if (error.status === 503) setHeader(context, 'Retry-After', '5');
+      throw new HttpException(error.problem, error.status);
+    }
     if (isBridgeError(error) && error.status === 503) {
       this.log('Unavailable: Bridge cannot be checked right now', { code: error.code });
       setHeader(context, 'Retry-After', '5');
