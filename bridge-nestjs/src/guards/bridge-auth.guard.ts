@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   HttpException,
   Inject,
   Injectable,
@@ -23,6 +24,14 @@ const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 /** What auth-core's check answers: an Actor, or the refusal. `flags` are the results it read for a write. */
 type CheckedRequest = { ok: true; actor: Actor; flags?: FlagSet } | { ok: false; error: BridgeError };
+
+const KEY_ROUTE_MESSAGE =
+  'A key may call this route only when a flag gates it (@RequireFlag, or a rule\'s featureFlag) and the flag is on for the key, or when the route is open (@Public()).';
+
+/** A person (or a job) arrives with a token of its own; every other kind of caller came with a key. */
+function isKeyActor(actor: Actor): boolean {
+  return actor.kind !== 'person' && actor.kind !== 'job';
+}
 
 /** A path as the router compares it: no repeated or trailing slash. */
 function tidy(path: string): string {
@@ -89,7 +98,10 @@ function header(request: HttpRequestLike, name: string): string | undefined {
  * cannot be checked it answers 503, never yes.
  *
  * Then the route's flag requirement (`@RequireFlag`, or a rule's
- * `featureFlag`), evaluated by Bridge for the caller.
+ * `featureFlag`), evaluated by Bridge for the caller. A key is evaluated like
+ * a person: it passes a gate when the flag's rule matches the key's
+ * privileges. A key is refused on a route with no flag gate unless the route
+ * is open (`@Public()`, an `ANONYMOUS` rule or `defaultAccess: 'public'`).
  */
 @Injectable()
 export class BridgeAuthGuard implements CanActivate {
@@ -180,13 +192,18 @@ export class BridgeAuthGuard implements CanActivate {
 
     let flags: Promise<FlagSet> | null = null;
     const readFlags = (): Promise<FlagSet> => {
-      // Flags are read with the person's token only, never with a credential that failed its check.
+      // Flags are read for the caller that checked out, a person or a key, never with a credential that failed its check.
       flags ??= actor === null ? Promise.resolve(new FlagSet()) : checked !== null ? Promise.resolve(checked) : this.server.flags.forRequest(credentials as RequestLike);
       return flags;
     };
     setBridgeState(request, { actor, flags: readFlags });
 
     const requirement = this.metadata<FeatureFlagRequirement>(REQUIRED_FEATURE_FLAG_KEY, context) ?? rule?.featureFlag;
+    // A key is protected by default: on a route no flag gates it is refused, unless the developer opened the route.
+    if (actor !== null && isKeyActor(actor) && requirement === undefined && !open) {
+      this.log('Refused: a key on a route with no flag gate', { method, path: pathOf(request), kind: actor.kind });
+      throw new ForbiddenException({ statusCode: 403, error: 'Forbidden', message: KEY_ROUTE_MESSAGE, code: 'KEY_ROUTE_NOT_OPEN' });
+    }
     if (requirement !== undefined) {
       const results = await readFlags();
       const unmet = unmetFlag(results, requirement);

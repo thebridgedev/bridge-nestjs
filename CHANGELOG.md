@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking)
+
+- **A key is refused on a route no flag gates.** A request with `x-api-key` used to reach any route the guard did not gate with a flag. Now it is refused with `403` (`code: "KEY_ROUTE_NOT_OPEN"`) unless the route is open. If your server is called with keys on routes that carry no `@RequireFlag` (and no rule with a `featureFlag`), those calls now get 403. Two ways to fix a route: gate it with `@RequireFlag('<flag>')`, and put the key's privilege in the flag's rule in Bridge; or, if the route should take anyone, open it on purpose with `@Public()` (or an `ANONYMOUS` rule, or `guard.defaultAccess: 'public'`). A person's request is not affected on any route. Routes that only carry `@RequireQuota` or `@RequireEntitlement` count as having no flag gate.
+
+### Added
+
+- **Keys pass flag gates by their privileges.** The guard asks Bridge for the flags of the key that made the request, as it does for a person. A key whose privileges match the flag's rule passes `@RequireFlag`; any other key gets `403 FEATURE_OFF`. In 1.0.0-alpha.1 to alpha.3 a call with a key got every flag's fallback. Needs the `@nebulr-group/bridge-auth-core` alpha that sends the key when it evaluates flags (the alpha that follows 1.0.0-alpha.11); with an older one a key still gets every flag's fallback, so a gated route refuses it.
+
 ## [1.0.0-alpha.3] - 2026-11-18
 
 ### Changed

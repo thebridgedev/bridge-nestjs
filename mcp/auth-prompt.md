@@ -226,7 +226,7 @@ list(@CurrentUser() user: BridgeUser, @Req() req: Request) {
 
 ## Step 6 — Mark public exceptions
 
-`@Public()` overrides any guard or rule and skips authentication for a handler — useful for a public `GET` beside a protected `POST` on the same path:
+`@Public()` overrides any guard or rule and skips authentication for a handler (it is also how a handler is opened to API keys: a key is refused with 403 `KEY_ROUTE_NOT_OPEN` on a handler no flag gates, unless the handler is `@Public()`) — useful for a public `GET` beside a protected `POST` on the same path:
 
 ```ts
 import { Controller, Get } from '@nestjs/common';
