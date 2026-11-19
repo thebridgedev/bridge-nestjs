@@ -43,6 +43,9 @@ export async function createSignedIssuer() {
   const entries: Record<Lane, string[]> = { 'identity-access': [], accounts: [], billing: [], 'app-registry': [] };
   /** Flag results per person (`sub`); `*` for everyone else with a token. */
   const flagResults = new Map<string, unknown[]>();
+  /** What Bridge shows a visitor: public flags only. */
+  let visitorResults: unknown[] = [];
+  const visitorAsks: { headers: Record<string, string>; body: unknown }[] = [];
   const usage: unknown[] = [];
   const calls: RecordedCall[] = [];
   const answers = new Map<string, Answer>();
@@ -65,6 +68,7 @@ export async function createSignedIssuer() {
         accounts: v2('/accounts'),
         billing: v2('/billing'),
         flags: v2('/flags'),
+        flags_visitor: v2(`/flags/apps/${APP}`),
       },
     },
     bridge_revocation_lanes: Object.fromEntries(LANES.map((lane) => [lane, laneUrl(lane)])),
@@ -117,6 +121,14 @@ export async function createSignedIssuer() {
         .map((key) => ({ key, value: true, reason: 'STATIC' }));
       return json({ flags: [...given, ...workspace] });
     }
+    if (method === 'POST' && path === `/v2/flags/apps/${APP}/ofrep/v1/evaluate/flags`) {
+      const headers: Record<string, string> = {};
+      request.headers.forEach((value, name) => {
+        headers[name] = value;
+      });
+      visitorAsks.push({ headers, body });
+      return json({ flags: visitorResults });
+    }
     if (method === 'POST' && path === '/v2/billing/usage') {
       if (request.headers.get('x-api-key') === null) return json({ status: 401 }, 401);
       usage.push(...((body as { reports: unknown[] }).reports ?? []));
@@ -159,6 +171,12 @@ export async function createSignedIssuer() {
     setFlags(sub: string, results: { key: string; value: unknown; reason?: string; metadata?: Record<string, unknown> }[]): void {
       flagResults.set(sub, results.map((result) => ({ reason: 'TARGETING_MATCH', ...result })));
     },
+    /** The public flags Bridge shows a visitor, who is not signed in. */
+    setVisitorFlags(results: { key: string; value: unknown; reason?: string }[]): void {
+      visitorResults = results.map((result) => ({ reason: 'STATIC', ...result }));
+    },
+    /** Every call a visitor's flags were asked with: its headers and body. */
+    visitorAsks,
     /** What a call on `METHOD /v2/...` answers. */
     answer(method: string, path: string, answer: Answer): void {
       answers.set(`${method} ${path}`, answer);

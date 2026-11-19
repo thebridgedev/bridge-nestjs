@@ -78,6 +78,21 @@ status() { … }
 
 The Actor has no role and no privileges on purpose: gate with a flag.
 
+**Flags on a public route.** A route nobody signed in to (`@Public()`) still reads flags. Bridge answers as it does for any visitor: the flags you marked **public** in Control Center, and nothing else. A flag you did not mark public is absent, so `@RequireFlag` on it refuses (`403 FEATURE_OFF`) and `@Flag(key, fallback)` gives its fallback. Nothing is sent with the question, so your app key never speaks for a stranger. The same goes for a credential that does not check out on a public route. A person or a key that does check out gets its own results, as on any route.
+
+```ts
+@Public()
+@RequireFlag('signup-banner')   // a public flag: visible without signing in
+@Get('banner')
+banner() { … }
+
+@Public()
+@Get('home')
+home(@Flag('home-hero', 'classic') hero: string) { … }
+```
+
+For code with no request (a job, a startup task), `BridgeService.visitorFlags({ country: 'SE' })` gives the same results. What you pass are facts your server knows; never pass what the caller sent as a fact. An answer is kept for ten seconds per set of facts, so a busy public route does not ask Bridge each time. While Bridge cannot answer, every flag gives its fallback and the route is still served. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
+
 ## Every gate is a flag
 
 ```ts
@@ -128,6 +143,8 @@ create() { … }
 ```
 
 Once the handler succeeds, Bridge counts one for the caller's workspace. Counts are sent in batches every few seconds and resent with the same ids, so nothing is counted twice. A limit on a count is a flag rule (`tickets-create` off once the plan's number is reached): the code only counts. `BridgeService.count(actor, metric, n)` counts by hand.
+
+Usage waits in memory until it is sent. To keep it through a crash or a restart, give the module a store: `usageStore: fileUsageQueue({ dir: '/var/lib/my-app/bridge-usage' })` from `@nebulr-group/bridge-auth-core/server/node`, or one of your own with `load`, `add` and `remove`. Each report keeps its id, so one that went out just before the crash and goes out again counts once; one that has waited longer than `maxQueuedAgeMs` (30 days by default, at most 34) is dropped and logged, as Bridge keeps ids for 35 days. One process owns one directory. On a platform whose disk does not outlive the process, use a store that writes to something that does. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
 
 A flag gate that is off because the plan is why (a plan feature the workspace lacks, or a limit that is used up) answers 402 `FEATURE_NOT_IN_PLAN` with an RFC 9457 problem body (`urn:bridge:problem:entitlement-missing` or `urn:bridge:problem:limit-reached`), never 403; any other reason stays 403 `FEATURE_OFF`.
 
@@ -219,7 +236,7 @@ receive(@WebhookEvent() event: BridgeWebhookEvent) {
 | `JwksService`, `TokenVerificationError`, `ApiTokenClaims` | `BridgeService.verify(request)`, `BridgeError` |
 | `BridgeService.fromJwt(jwt)`, `TenantScope` | `BridgeService` for the caller; `BridgeManagementService` for workspaces, members, billing |
 | `BridgeHttpService` | `BridgeManagementService` |
-| `@nebulr-group/bridge-nestjs/flags`, `BridgeFlagsModule`, `BridgeFlagsService` | `@RequireFlag`, `@Flag`, `@Flags`, `BridgeService.flags()` |
+| `@nebulr-group/bridge-nestjs/flags`, `BridgeFlagsModule`, `BridgeFlagsService` | `@RequireFlag`, `@Flag`, `@Flags`, `BridgeService.flags()`. For a caller who is not signed in: public flags, on `@Public()` routes and with `BridgeService.visitorFlags()`. Flags are evaluated by Bridge, not in your process |
 
 ## Licence
 

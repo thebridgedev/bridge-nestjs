@@ -78,6 +78,17 @@ export interface BridgeModuleOptions {
   revocationIntervalMs?: number;
   /** How often counted usage is sent. @default 5000 */
   usageFlushMs?: number;
+  /**
+   * Where counted usage waits so a crash or restart does not lose it: the
+   * store from `fileUsageQueue` (`@nebulr-group/bridge-auth-core/server/node`),
+   * or one of your own. Each report keeps its id, so one sent before the crash
+   * and sent again counts once. Without it, usage waits in memory only.
+   */
+  usageStore?: BridgeServerOptions['usageStore'];
+  /** The most reports kept while Bridge cannot take them. @default 10000 */
+  maxQueuedReports?: number;
+  /** How long a report may wait before it is dropped instead of sent, at most 34 days. @default 2592000000 (30 days) */
+  maxQueuedAgeMs?: number;
   /** A `fetch` to use instead of the global one (tests, proxies). */
   fetch?: BridgeServerOptions['fetch'];
   /** How long a management client call may take before it fails with `network`. @default 10000 */

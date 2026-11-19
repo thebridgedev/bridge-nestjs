@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.5] - Unreleased
+
+Needs `@nebulr-group/bridge-auth-core` 1.0.0-alpha.14.
+
+### Added
+
+- **A key can name the workspace whose plan its flag results use.** A request with an app key and a `Bridge-Workspace` header (or `x-tenant-id`, as the 0.x versions took it) gets the flag results of that workspace, in the guard and in `BridgeService.flags`. Only a valid workspace id is passed on; a key that names none, or an invalid one, gets its own results as before. A person's request is not affected.
+- **Flags on a public route.** A route nobody signed in to (`@Public()`) now reads flags: Bridge answers as it does for any visitor, with the flags you marked public and no others, so `@RequireFlag`, `@Flag` and `@Flags` work there and a flag that is not public gives `403 FEATURE_OFF` or its fallback. Nothing is sent with the question, so the app key never speaks for a stranger; a credential that does not check out on a public route is treated the same. `BridgeService.visitorFlags(hints)` gives the same results to code with no request (hints are facts your server knows, never what the caller sent), and `BridgeService.flags(request, hints)` does the same for an unauthenticated request. Before, such a route got an empty set and every gate refused. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
+- **Usage that survives a crash or a restart.** The module takes `usageStore` (and `maxQueuedReports`, `maxQueuedAgeMs`), passed to auth-core: `fileUsageQueue({ dir })` from `@nebulr-group/bridge-auth-core/server/node` keeps counted usage in a journal on disk, as 0.x did, or give a store of your own with `load`, `add` and `remove`. At start what waited is sent with the ids it was counted with, so a report sent just before the crash and sent again counts once. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.
+
 ## [1.0.0-alpha.4] - Unreleased
 
 Needs `@nebulr-group/bridge-auth-core` 1.0.0-alpha.13, which evaluates flags for keys.

@@ -44,6 +44,19 @@ class TestController {
     return { actor };
   }
 
+  @Public()
+  @RequireFlag('banner')
+  @Get('public/banner')
+  banner() {
+    return { ok: true };
+  }
+
+  @Public()
+  @Get('public/flags')
+  async publicFlags(@Flag('banner', false) banner: boolean, @Flag('page-size', 20) size: number, @Flags() flags: FlagSet, @Req() request: object) {
+    return { banner, size, internal: flags.enabled('internal-tools'), viaService: await this.bridge.enabled(request as never, 'banner') };
+  }
+
   @Post('notes')
   write(@Body() body: unknown) {
     return { saved: body };

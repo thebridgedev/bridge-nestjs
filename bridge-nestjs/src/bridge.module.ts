@@ -40,6 +40,9 @@ function serverFor(options: BridgeModuleOptions): BridgeServer {
     ...(options.strictLagMs === undefined ? {} : { strictLagMs: options.strictLagMs }),
     ...(options.revocationIntervalMs === undefined ? {} : { revocationIntervalMs: options.revocationIntervalMs }),
     ...(options.usageFlushMs === undefined ? {} : { usageFlushMs: options.usageFlushMs }),
+    ...(options.usageStore === undefined ? {} : { usageStore: options.usageStore }),
+    ...(options.maxQueuedReports === undefined ? {} : { maxQueuedReports: options.maxQueuedReports }),
+    ...(options.maxQueuedAgeMs === undefined ? {} : { maxQueuedAgeMs: options.maxQueuedAgeMs }),
     log: (message, details) => (options.debug ? logger.debug(details === undefined ? message : `${message} ${JSON.stringify(details)}`) : undefined),
   });
 }
