@@ -64,6 +64,18 @@ While Bridge cannot be checked the guard answers `503` with `Retry-After`, never
 
 `@AcceptAuth('jwt')` takes only a person's token; `@AcceptAuth('api_token')` only a key.
 
+**A key is refused on a route no flag gates.** A request with `x-api-key` reaches a route only when `@RequireFlag` (or a rule's `featureFlag`) gates it and the flag is on for the key, so put the key's privilege in the flag's rule; or when you open the route on purpose with `@Public()`, an `ANONYMOUS` rule or `guard.defaultAccess: 'public'`. Otherwise the answer is `403` with `code: 'KEY_ROUTE_NOT_OPEN'`. A person's request is not affected.
+
+```ts
+@RequireFlag('reports')   // the flag's rule: the key's privilege
+@Get('reports')
+reports() { … }
+
+@Public()                 // open to everyone, keys too
+@Get('status')
+status() { … }
+```
+
 The Actor has no role and no privileges on purpose: gate with a flag.
 
 ## Every gate is a flag
@@ -85,7 +97,7 @@ A refusal says why:
 | 402 | `FEATURE_NOT_IN_PLAN` | A plan feature keeps the flag off: an upgrade would turn it on. `feature` names it, `fix` is your `manageRoute`. |
 | 403 | `FEATURE_OFF` | Anything else. |
 
-Flags are worked out by Bridge for the person whose token came with the request. A call with a key has no person: every flag gives its fallback. `@Flags()` gives the whole set; `BridgeService.flags(request)` the same outside a decorator.
+Flags are worked out by Bridge for the caller: the person whose token came with the request, or the key. A key passes a gate when the flag's rule matches the key's privileges, and gets `403 FEATURE_OFF` when it does not. `@Flags()` gives the whole set; `BridgeService.flags(request)` the same outside a decorator.
 
 Route rules do the same from one list:
 
@@ -199,7 +211,7 @@ receive(@WebhookEvent() event: BridgeWebhookEvent) {
 | `@CurrentUser()`, `@CurrentTenant()`, `BridgeUser`, `BridgeTenant` | `@CurrentActor()` (`personId`, `workspaceId`, …) |
 | `@RequirePrivilege()`, `tokenPrivilege` in a rule | A flag whose rule names the privilege, with `@RequireFlag` |
 | `@RequireFeatureFlag(...)` | Unchanged; `@RequireFlag` is the same decorator |
-| `RouteRule.privilege`, `guard.global`, `guard.defaultAccess`, `@Public()`, `@AcceptAuth()` | Unchanged |
+| `RouteRule.privilege`, `guard.global`, `guard.defaultAccess`, `@Public()`, `@AcceptAuth()` | Unchanged for a person's request. A key is refused on a route with no flag gate unless the route is open (`@Public()`) |
 | A rule's `graphqlOperation` | `graphqlField: 'Query.field'`, or a decorator on the resolver. The module refuses to start with `graphqlOperation` |
 | A rule's `path` matched against the URL | Matched against the declared route: write it as declared (`/users/*` or `/users/:id`), not as a concrete URL |
 | `@RequireQuota`, `@SyncQuota`, `@RequireEntitlement`, `BridgeQuotaService` | Unchanged. `current` gets `{ id, userId, actor, request }` (no `scope`), and `@RequireEntitlement` asks the flag `bridge:billing.entitlement.<key>` |

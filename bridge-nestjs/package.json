@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-nestjs",
-  "version": "1.0.0-alpha.3",
+  "version": "1.0.0-alpha.4",
   "description": "The Bridge for NestJS: access tokens checked against the app's revocation list, flag-gated endpoints, \"count this\", the management client and webhook checks, as a module, a guard and decorators.",
   "author": "Nebulr Group",
   "license": "MIT",
@@ -25,7 +25,7 @@
     "test:coverage": "jest --coverage"
   },
   "dependencies": {
-    "@nebulr-group/bridge-auth-core": "1.0.0-alpha.11"
+    "@nebulr-group/bridge-auth-core": "1.0.0-alpha.13"
   },
   "peerDependencies": {
     "@nestjs/common": "^10.0.0 || ^11.0.0 || ^12.0.0",
