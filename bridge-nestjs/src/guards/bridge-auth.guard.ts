@@ -16,6 +16,7 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { REQUIRED_FEATURE_FLAG_KEY } from '../decorators/require-flag.decorator';
 import { STRICT_KEY } from '../decorators/strict.decorator';
 import { featureRefusal, featureRefusalBody, unmetFlag } from '../flags/feature-refusal';
+import { workspaceNamedBy } from '../flags/key-workspace';
 import { billingLockedFrom } from '../quota/billing-locked';
 import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions, type FeatureFlagRequirement, type RouteRule } from '../options';
 import { graphqlFieldOf, graphqlIsMutation, pathOf, requestOf, routePathOf, setBridgeState, setHeader, type HttpRequestLike } from '../request-context';
@@ -195,7 +196,7 @@ export class BridgeAuthGuard implements CanActivate {
       // Flags are read for the caller that checked out, a person or a key, never with a credential that failed its check.
       // With no caller (an open route nobody signed in to, or one whose credential failed) Bridge answers as it does for
       // any visitor: public flags only, with no credential sent. The route's own key is never used for a stranger.
-      flags ??= actor === null ? this.server.flags.forVisitor() : checked !== null ? Promise.resolve(checked) : this.server.flags.forRequest(credentials as RequestLike);
+      flags ??= actor === null ? this.server.flags.forVisitor() : checked !== null ? Promise.resolve(checked) : this.server.flags.forRequest(credentials as RequestLike, {}, this.workspaceOption(actor, request));
       return flags;
     };
     setBridgeState(request, { actor, flags: readFlags });
@@ -216,6 +217,12 @@ export class BridgeAuthGuard implements CanActivate {
     }
     this.log('Allowed', { method, path: pathOf(request), kind: actor?.kind ?? 'anonymous' });
     return true;
+  }
+
+  /** `{ workspace }` for a key that names one, nothing for a person or a key that names none. */
+  private workspaceOption(actor: Actor | null, request: HttpRequestLike): { workspace?: string } {
+    const workspace = actor !== null && isKeyActor(actor) ? workspaceNamedBy((name) => header(request, name)) : undefined;
+    return workspace === undefined ? {} : { workspace };
   }
 
   /** Only the headers the route accepts, so a second credential can never decide. Null when none of them came. */

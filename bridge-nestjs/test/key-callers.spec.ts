@@ -65,7 +65,7 @@ class Things {
   }
 }
 
-async function appWith(options: BridgeModuleOptions, seen: { forRequest: RequestLike[] }): Promise<INestApplication> {
+async function appWith(options: BridgeModuleOptions, seen: { forRequest: RequestLike[]; workspaces?: (string | undefined)[] }): Promise<INestApplication> {
   const server = {
     check: async (checked: RequestLike) => {
       const headers = checked.headers as Record<string, string | undefined>;
@@ -79,8 +79,9 @@ async function appWith(options: BridgeModuleOptions, seen: { forRequest: Request
     },
     flags: {
       // Bridge answers for the caller whose credential came; what it decides is the flag's rule, which these stand in for.
-      forRequest: async (checked: RequestLike) => {
+      forRequest: async (checked: RequestLike, _hints?: unknown, named?: { workspace?: string }) => {
         seen.forRequest.push(checked);
+        seen.workspaces?.push(named?.workspace);
         const headers = checked.headers as Record<string, string | undefined>;
         const credential = headers['x-api-key'] ?? headers['authorization'];
         return new FlagSet(new Map([['exports', { key: 'exports', value: HOLDS.has(String(credential)), reason: 'TARGETING_MATCH' }]]));
@@ -103,10 +104,10 @@ async function appWith(options: BridgeModuleOptions, seen: { forRequest: Request
 
 describe('the guard and a caller that came with a key', () => {
   let app: INestApplication;
-  let seen: { forRequest: RequestLike[] };
+  let seen: { forRequest: RequestLike[]; workspaces: (string | undefined)[] };
 
   beforeEach(async () => {
-    seen = { forRequest: [] };
+    seen = { forRequest: [], workspaces: [] };
     app = await appWith({} as BridgeModuleOptions, seen);
   });
 
@@ -131,6 +132,20 @@ describe('the guard and a caller that came with a key', () => {
       await asKey('get', '/exports', 'key-with');
       expect(seen.forRequest).toHaveLength(1);
       expect(seen.forRequest[0]?.headers).toEqual({ 'x-api-key': 'key-with' });
+    });
+
+    it('passes the workspace a key names (Bridge-Workspace, or x-tenant-id as 0.x sends it) when it asks for the flags, and only a valid one', async () => {
+      await asKey('get', '/exports', 'key-with').set('bridge-workspace', 'ws-1');
+      await asKey('get', '/exports', 'key-with').set('x-tenant-id', 'ws-2');
+      await asKey('get', '/exports', 'key-with').set('bridge-workspace', 'ws-3').set('x-tenant-id', 'ws-4');
+      await asKey('get', '/exports', 'key-with').set('bridge-workspace', 'not a valid id!');
+      await asKey('get', '/exports', 'key-with');
+      expect(seen.workspaces).toEqual(['ws-1', 'ws-2', 'ws-3', undefined, undefined]);
+    });
+
+    it('never passes a workspace for a person: their results are for their own', async () => {
+      await asPerson('get', '/exports').set('bridge-workspace', 'ws-1');
+      expect(seen.workspaces.filter((workspace) => workspace !== undefined)).toEqual([]);
     });
 
     it('refuses a key whose privileges do not match with 403 FEATURE_OFF', async () => {

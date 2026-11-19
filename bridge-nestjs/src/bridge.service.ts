@@ -7,6 +7,7 @@ import type {
   RequestLike,
   VerifyOptions,
 } from '@nebulr-group/bridge-auth-core/server';
+import { workspaceInHeaders } from './flags/key-workspace';
 import { BRIDGE_SERVER } from './options';
 import { bridgeStateOf } from './request-context';
 
@@ -54,7 +55,9 @@ export class BridgeService implements OnModuleDestroy {
     const state = bridgeStateOf(request);
     if (state !== undefined && Object.keys(hints).length === 0) return state.flags();
     if (state !== undefined && state.actor === null) return this.server.flags.forVisitor(hints);
-    return this.server.flags.forRequest(request, hints);
+    // A key may name the workspace whose plan its results use; auth-core sends it with a key and never with a person's token.
+    const workspace = workspaceInHeaders(request.headers as Record<string, string | readonly string[] | undefined>);
+    return this.server.flags.forRequest(request, hints, workspace === undefined ? {} : { workspace });
   }
 
   /**
