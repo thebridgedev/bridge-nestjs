@@ -106,7 +106,7 @@ Returned when authenticated but an API token lacks the scope `@RequirePrivilege`
 {
   "statusCode": 403,
   "error": "Forbidden",
-  "message": "Privilege 'USER_READ' required"
+  "message": "Privilege 'users:read' required"
 }
 ```
 

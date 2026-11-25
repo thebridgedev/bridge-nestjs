@@ -7,7 +7,7 @@ sidebar:
 
 # Define roles & privileges
 
-A **privilege** is a scoped permission key with a description, for example `USER_WRITE`, "Can create and edit users." A **role** bundles privileges under a name and a unique key, and is what you actually assign to users: define a privilege once, then include its key in as many roles as need it. (See [How roles & privileges work](/auth/roles/how-it-works/) for the full concept.)
+A **privilege** is a scoped permission key with a description, for example `users:write`, "Can create and edit users." A **role** bundles privileges under a name and a unique key, and is what you actually assign to users: define a privilege once, then include its key in as many roles as need it. (See [How roles & privileges work](/auth/roles/how-it-works/) for the full concept.)
 
 You define both in two places:
 
@@ -27,14 +27,14 @@ There's no CLI command for creating a privilege yet, only for referencing an exi
 
 ```bash
 bridge role create --name "Support" --key SUPPORT \
-  --privileges USER_READ,TENANT_READ \
+  --privileges users:read,workspace:read \
   --description "Read-only access for support staff"
 ```
 
 **Change what a role grants** by passing the full new privilege list, not just what you're adding or removing. `--privileges` replaces the role's list wholesale rather than merging into it:
 
 ```bash
-bridge role update --id <roleId> --privileges USER_READ,USER_WRITE,TENANT_READ
+bridge role update --id <roleId> --privileges users:read,users:write,workspace:read
 ```
 
 **List and remove roles:**

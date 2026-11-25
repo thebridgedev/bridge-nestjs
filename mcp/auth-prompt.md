@@ -6,7 +6,7 @@ All JWT and API-token verification is delegated to `@nebulr-group/bridge-auth-co
 
 ## The one rule for app code
 
-**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "users:write"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
@@ -14,7 +14,7 @@ Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in 
 
 In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "USER_WRITE"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
 
 ## Decide first — which check do you need?
 
@@ -132,22 +132,22 @@ import { Controller, Get } from '@nestjs/common';
 import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
 
 @Controller('admin')
-@RequireFeatureFlag('admin-area')        // rule: privileges contains "USER_WRITE"
+@RequireFeatureFlag('admin-area')        // rule: privileges contains "users:write"
 export class AdminController {
   @Get('dashboard')
   dashboard() {}
 
   @Get('settings')
-  @RequireFeatureFlag('admin-settings')  // rule: privileges contains "TENANT_WRITE" — most specific decorator wins
+  @RequireFeatureFlag('admin-settings')  // rule: privileges contains "workspace:write" — most specific decorator wins
   settings() {}
 }
 ```
 
-In the default setup ADMIN and OWNER hold `USER_WRITE` and only OWNER holds `TENANT_WRITE`; read the app's real roles with `list_roles` / `bridge role list` before writing the rule. Changing who gets the endpoint is then a rule change, not a release. The same flag can sit on a route rule instead: `{ path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' }`. See `feature-flags-prompt.md` for creating flags and rules.
+In the default setup ADMIN and OWNER hold `users:write` and only OWNER holds `workspace:write`; read the app's real roles with `list_roles` / `bridge role list` before writing the rule. Changing who gets the endpoint is then a rule change, not a release. The same flag can sit on a route rule instead: `{ path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' }`. See `feature-flags-prompt.md` for creating flags and rules.
 
 ## Step 4 — Scope API tokens with `@RequirePrivilege` (API tokens only)
 
-`@RequirePrivilege(key)` enforces that the **API token** (x-api-key, a machine caller) carries a privilege in its `privileges` claim. It is a token scope, not a gate on a person: a signed-in user is not checked against it, so an endpoint can require `USER_WRITE` from API-token callers while signed-in users are gated by the endpoint's flag.
+`@RequirePrivilege(key)` enforces that the **API token** (x-api-key, a machine caller) carries a privilege in its `privileges` claim. It is a token scope, not a gate on a person: a signed-in user is not checked against it, so an endpoint can require `users:write` from API-token callers while signed-in users are gated by the endpoint's flag.
 
 ```ts
 import { Controller, Get, Post } from '@nestjs/common';
@@ -156,11 +156,11 @@ import { RequirePrivilege } from '@nebulr-group/bridge-nestjs';
 @Controller('users')
 export class UsersController {
   @Get()
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   list() {}
 
   @Post()
-  @RequirePrivilege('USER_WRITE')
+  @RequirePrivilege('users:write')
   create() {}
 }
 ```
@@ -201,7 +201,7 @@ export class IntegrationsController {
   // API-token-only — a user Bearer token gets 401.
   @Post('sync')
   @AcceptAuth('api_token')
-  @RequirePrivilege('TENANT_WRITE')
+  @RequirePrivilege('workspace:write')
   sync(@Req() req: Request) {
     const { tenantId } = req.bridgeApiToken!;
     return this.syncService.run(tenantId);
@@ -213,7 +213,7 @@ export class IntegrationsController {
 
 ```ts
 @Get()
-@RequirePrivilege('USER_READ')
+@RequirePrivilege('users:read')
 list(@CurrentUser() user: BridgeUser, @Req() req: Request) {
   if (req.bridgeApiToken) {
     // server-to-server: tenant comes from the API token
@@ -296,5 +296,5 @@ export class SocketAuthService {
 2. **No token → 401:** a protected route without a credential returns 401.
 3. **Valid JWT → 200:** a protected route with a valid `Authorization: Bearer` returns 200 scoped to the JWT's tenant.
 4. **Flag gate:** a `@RequireFeatureFlag('admin-settings')` route returns 403 `FEATURE_NOT_PERMITTED` / `FEATURE_OFF` for a JWT the flag is off for, and 200 once the flag's rule matches that user.
-5. **Privilege gate:** an `@AcceptAuth('api_token')` + `@RequirePrivilege('TENANT_WRITE')` route returns 200 for an API token carrying `TENANT_WRITE`, 401 for a user Bearer token, and 403 for an API token missing the privilege.
+5. **Privilege gate:** an `@AcceptAuth('api_token')` + `@RequirePrivilege('workspace:write')` route returns 200 for an API token carrying `workspace:write`, 401 for a user Bearer token, and 403 for an API token missing the privilege.
 6. **Auth-type restriction:** an `@AcceptAuth('jwt')` route returns 401 when called with `x-api-key`.

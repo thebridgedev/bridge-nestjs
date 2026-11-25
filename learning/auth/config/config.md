@@ -142,7 +142,7 @@ BridgeModule.forRoot({
 })
 ```
 
-**Who gets a route is a flag.** `privilege` only says whether the route needs a signed-in caller; `featureFlag` (or `@RequireFeatureFlag()` on the handler) decides who gets it, and the flag's rule says why, e.g. `privileges contains "USER_WRITE"` for `manage-users`. See [Gate with feature flags](/auth/roles/gate-with-flags/).
+**Who gets a route is a flag.** `privilege` only says whether the route needs a signed-in caller; `featureFlag` (or `@RequireFeatureFlag()` on the handler) decides who gets it, and the flag's rule says why, e.g. `privileges contains "users:write"` for `manage-users`. See [Gate with feature flags](/auth/roles/gate-with-flags/).
 
 ## `RoutePrivilege`: what a rule's `privilege` can be
 
@@ -152,7 +152,7 @@ type RoutePrivilege =
   | 'AUTHENTICATED';  // any valid credential, user JWT or API token
 ```
 
-Nothing else. A rule that still carries a privilege key such as `USER_READ`, or the removed `plans` / `entitlement` / `role` options, stops the app at startup with an error naming the flag setup to use instead: `featureFlag` with the flag ruled on that privilege (or on `bridge:billing.entitlement.<key>` for a plan feature). An API token's scope is `@RequirePrivilege()` on the handler, API tokens only (see [API tokens](/auth/api-tokens/)).
+Nothing else. A rule that still carries a privilege key such as `users:read`, or the removed `plans` / `entitlement` / `role` options, stops the app at startup with an error naming the flag setup to use instead: `featureFlag` with the flag ruled on that privilege (or on `bridge:billing.entitlement.<key>` for a plan feature). An API token's scope is `@RequirePrivilege()` on the handler, API tokens only (see [API tokens](/auth/api-tokens/)).
 
 ## Environment variables
 

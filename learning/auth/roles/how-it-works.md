@@ -7,7 +7,7 @@ sidebar:
 
 # How roles & privileges work
 
-A **role** is a named set of **privileges**: scoped permission keys like `USER_READ` or `TENANT_WRITE`. Every user is assigned exactly one role per workspace (called a *tenant* in the API); the role determines what that user can do in that workspace.
+A **role** is a named set of **privileges**: scoped permission keys like `users:read` or `workspace:write`. Every user is assigned exactly one role per workspace (called a *tenant* in the API); the role determines what that user can do in that workspace.
 
 Roles are fully custom to your app; you're not stuck with a fixed enum. Every app starts with:
 
@@ -49,7 +49,7 @@ Two mechanisms, for two kinds of caller:
 
 | Mechanism | Applies to | What decides |
 |---|---|---|
-| `@RequireFeatureFlag(key)` (or a route rule's `featureFlag`) | A signed-in person (user JWT) | The flag's rule, e.g. `privileges contains "USER_WRITE"` |
+| `@RequireFeatureFlag(key)` (or a route rule's `featureFlag`) | A signed-in person (user JWT) | The flag's rule, e.g. `privileges contains "users:write"` |
 | `@RequirePrivilege(privilege)` | API tokens only; checks `req.bridgeApiToken.privileges` | The token's scope. It is not a gate on a person, so a user JWT is not checked against it |
 
 In practice: gate what a **signed-in person** can do with a flag ruled on a privilege, and scope what a **token** (script, integration, CI job) can do with `@RequirePrivilege()`. Prefer a privilege rule over a role rule; write `user.role eq "ADMIN"` only when you mean the role itself. `contains` is exact membership. See [Gate with feature flags](/auth/roles/gate-with-flags/) and [API tokens](/auth/api-tokens/).
@@ -60,7 +60,7 @@ import { BridgeAuthGuard, RequireFeatureFlag, CurrentUser, BridgeUser } from '@n
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)
-@RequireFeatureFlag('admin-area') // rule: privileges contains "USER_WRITE"
+@RequireFeatureFlag('admin-area') // rule: privileges contains "users:write"
 export class AdminController {
   @Get('dashboard')
   getDashboard(@CurrentUser() user: BridgeUser) {
@@ -68,7 +68,7 @@ export class AdminController {
   }
 
   @Get('settings')
-  @RequireFeatureFlag('admin-settings') // rule: privileges contains "TENANT_WRITE"
+  @RequireFeatureFlag('admin-settings') // rule: privileges contains "workspace:write"
   getSettings(@CurrentUser() user: BridgeUser) {
     return { settings: 'sensitive data' };
   }

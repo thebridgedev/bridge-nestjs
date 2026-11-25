@@ -2,7 +2,7 @@
 
 ## The one rule for app code
 
-**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "users:write"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
@@ -57,7 +57,7 @@ interface BridgeUser {
   scope?: string;                // OAuth scopes granted to the token
   role?: string;                 // User's role within the tenant
   multiTenantAccess?: boolean;
-  privileges?: string[];         // Privilege strings (e.g. ['AUTHENTICATED', 'USER_READ'])
+  privileges?: string[];         // Privilege strings (e.g. ['app:use', 'users:read'])
 }
 ```
 
@@ -200,7 +200,7 @@ interface ApiTokenClaims {
   appId: string;            // App ID the token was issued for
   tenantId: string | null;  // Tenant ID (null for app-level tokens)
   type: 'api';              // Always 'api' for API tokens
-  privileges: string[];     // Privilege strings (e.g. ['USER_READ', 'TENANT_WRITE'])
+  privileges: string[];     // Privilege strings (e.g. ['users:read', 'workspace:write'])
 }
 ```
 
@@ -215,16 +215,16 @@ import { RequirePrivilege } from '@nebulr-group/bridge-nestjs';
 @Controller('users')
 export class UsersController {
   @Get()
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   listUsers() {
-    // API tokens must have USER_READ privilege
+    // API tokens must have users:read privilege
     // API tokens only: a user JWT is not checked against it
   }
 
   @Post()
-  @RequirePrivilege('USER_WRITE')
+  @RequirePrivilege('users:write')
   createUser() {
-    // API tokens must have USER_WRITE privilege
+    // API tokens must have users:write privilege
   }
 }
 ```
@@ -260,7 +260,7 @@ import { Request } from 'express';
 @Controller('users')
 export class UsersController {
   @Get()
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   listUsers(@CurrentUser() user: BridgeUser, @Req() req: Request) {
     if (req.bridgeApiToken) {
       // Authenticated via API token
@@ -284,7 +284,7 @@ Endpoints that only accept API tokens:
 export class IntegrationsController {
   @Post('sync')
   @AcceptAuth('api_token')
-  @RequirePrivilege('TENANT_WRITE')
+  @RequirePrivilege('workspace:write')
   syncData(@Req() req: Request) {
     const { tenantId, privileges } = req.bridgeApiToken!;
     return this.syncService.run(tenantId);
@@ -312,7 +312,7 @@ export class AccountController {
 
 ## Gating by role or privilege: a flag
 
-Who may call an endpoint is a flag whose rule names a privilege, e.g. `privileges contains "USER_WRITE"` (in the default setup ADMIN and OWNER hold it). Read the app's real roles and privileges first (`list_roles` / `bridge role list`); prefer a privilege rule over a role rule (`user.role eq "ADMIN"` only when you mean the role itself). `contains` is exact membership.
+Who may call an endpoint is a flag whose rule names a privilege, e.g. `privileges contains "users:write"` (in the default setup ADMIN and OWNER hold it). Read the app's real roles and privileges first (`list_roles` / `bridge role list`); prefer a privilege rule over a role rule (`user.role eq "ADMIN"` only when you mean the role itself). `contains` is exact membership.
 
 ### Controller-level and route-level usage
 
@@ -322,7 +322,7 @@ import { BridgeAuthGuard, RequireFeatureFlag, CurrentUser, BridgeUser } from '@n
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)
-@RequireFeatureFlag('admin-area') // rule: privileges contains "USER_WRITE"
+@RequireFeatureFlag('admin-area') // rule: privileges contains "users:write"
 export class AdminController {
   @Get('dashboard')
   getDashboard(@CurrentUser() user: BridgeUser) {
@@ -330,7 +330,7 @@ export class AdminController {
   }
 
   @Get('settings')
-  @RequireFeatureFlag('admin-settings') // rule: privileges contains "TENANT_WRITE"
+  @RequireFeatureFlag('admin-settings') // rule: privileges contains "workspace:write"
   getSettings(@CurrentUser() user: BridgeUser) {
     return { settings: 'sensitive data' };
   }
