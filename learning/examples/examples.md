@@ -72,7 +72,7 @@ export class MeController {
       userId: user.id,
       email: user.email,
       role: user.role,
-      privileges: user.privileges, // ['AUTHENTICATED', 'USER_READ', ...]
+      privileges: user.privileges, // ['app:use', 'users:read', ...]
       tenantId: tenant.id,
       tenantName: tenant.name,
     };
@@ -83,7 +83,7 @@ export class MeController {
 ## 3. Who gets an endpoint: a flag
 
 Every gate is a flag, and the flag's rule says why. `admin-area` is ruled on a
-privilege, e.g. `privileges contains "USER_WRITE"` (ADMIN and OWNER hold it in
+privilege, e.g. `privileges contains "users:write"` (ADMIN and OWNER hold it in
 the default setup; read the app's real roles with `list_roles` /
 `bridge role list`). The code never reads the role.
 
@@ -96,7 +96,7 @@ import { BridgeAuthGuard, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs
 @RequireFeatureFlag('admin-area')        // applies to the whole controller
 export class AdminController {
   @Get('settings')
-  @RequireFeatureFlag('admin-settings')  // its own flag, e.g. privileges contains "TENANT_WRITE"
+  @RequireFeatureFlag('admin-settings')  // its own flag, e.g. privileges contains "workspace:write"
   getSettings() { ... }
 }
 ```
@@ -113,7 +113,7 @@ import { BridgeAuthGuard, RequirePrivilege, AcceptAuth } from '@nebulr-group/bri
 @UseGuards(BridgeAuthGuard)
 export class IntegrationUsersController {
   @Get()
-  @RequirePrivilege('USER_READ')   // API tokens only: the scope an x-api-key caller must carry
+  @RequirePrivilege('users:read')   // API tokens only: the scope an x-api-key caller must carry
   list() { ... }
 }
 ```

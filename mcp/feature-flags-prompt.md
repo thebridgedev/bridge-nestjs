@@ -6,7 +6,7 @@ On a backend there is no demo page to look at. The equivalent proof is a **guard
 
 ## The one rule for app code
 
-**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "users:write"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
@@ -14,7 +14,7 @@ Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in 
 
 In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "USER_WRITE"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
 
 ## Decide first — which surface do you need?
 

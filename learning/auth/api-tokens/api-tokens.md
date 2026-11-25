@@ -36,7 +36,7 @@ interface ApiTokenClaims {
 }
 ```
 
-- **`privileges`**: the exact set the token was created with; it can never do more than this list allows. This is the same privilege-key vocabulary your [roles](/auth/roles/how-it-works/) use (`USER_READ`, `TENANT_WRITE`, or a custom key).
+- **`privileges`**: the exact set the token was created with; it can never do more than this list allows. This is the same privilege-key vocabulary your [roles](/auth/roles/how-it-works/) use (`users:read`, `workspace:write`, or a custom key).
 - **`tenantId`**: `null` for an app-level token not tied to a specific workspace; a real ID for a workspace-scoped token. See [Multi-tenancy](/auth/multi-tenancy/) for what that means for your endpoints.
 - **`type: 'api'`**: verified explicitly; a token missing this or carrying the wrong value fails with `TOKEN_INVALID` even if it's otherwise active (guards against a user-JWT-shaped token being replayed on the API-token path).
 - **`appId`** must match your app's configured `appId` exactly, or verification fails with `APP_MISMATCH`: a token minted for a different Bridge app is rejected outright, even when Bridge reports it active.
@@ -69,7 +69,7 @@ import { BridgeAuthGuard, RequirePrivilege } from '@nebulr-group/bridge-nestjs';
 @UseGuards(BridgeAuthGuard)
 export class UsersController {
   @Get()
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   listUsers() { /* … */ }
 }
 ```
@@ -112,15 +112,15 @@ class ApiTokenTestController {
 
   @Get('privileged')
   @UseGuards(BridgeAuthGuard)
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   privileged() {
     return { ok: true };
   }
 }
 ```
 
-- `x-api-key: <token with USER_READ>` → `GET /api-token-test/privileged` → `200`
-- `x-api-key: <token without USER_READ>` → `403`
+- `x-api-key: <token with users:read>` → `GET /api-token-test/privileged` → `200`
+- `x-api-key: <token without users:read>` → `403`
 - `x-api-key: <token with an appId for a different app>` → `401`
 - `x-api-key: <revoked token>` → `401` (introspection reports it inactive)
 - `Authorization: Bearer <user JWT, no privileges claim at all>` → `GET /api-token-test/privileged` → `200` (user JWTs bypass `@RequirePrivilege`)

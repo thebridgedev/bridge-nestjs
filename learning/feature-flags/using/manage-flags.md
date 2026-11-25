@@ -18,7 +18,7 @@ export class Rollouts {
 }
 ```
 
-The key needs `flags.flags:read` to read, `flags.flags:write` to make, change, kill, schedule and import, and `FLAG_DELETE` to delete. Give it only the ones your code uses. Without `BridgeModule`, `createBridgeManagement({ server, appKey })` gives the same `flags`.
+The key needs `flags.flags:read` to read, `flags.flags:write` to make, change, kill, schedule and import, and `flags:delete` to delete. Give it only the ones your code uses. Without `BridgeModule`, `createBridgeManagement({ server, appKey })` gives the same `flags`.
 
 ## The calls
 

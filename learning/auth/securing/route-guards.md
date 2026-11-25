@@ -128,7 +128,7 @@ BridgeModule.forRoot({
 | `path` | `string` | REST URL wildcard pattern, e.g. `/account/subscription/**`. Matched against the request path only (not method). |
 | `graphqlOperation` | `string` | GraphQL operation name, case-sensitive camelCase, e.g. `listUsers`. |
 | `privilege` | `'ANONYMOUS' \| 'AUTHENTICATED'` (required) | Whether the route needs a signed-in caller. |
-| `featureFlag` | `string \| { any } \| { all }` | The flag that decides who gets the route; its rule says why (e.g. `privileges contains "USER_WRITE"`). |
+| `featureFlag` | `string \| { any } \| { all }` | The flag that decides who gets the route; its rule says why (e.g. `privileges contains "users:write"`). |
 
 Rules are matched in order; the first match wins. GraphQL requests are matched only against `graphqlOperation` rules, REST requests only against `path` rules; provide the field that applies.
 

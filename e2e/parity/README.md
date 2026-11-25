@@ -26,7 +26,7 @@ All from the environment, set by whoever runs it. A test app, its key and its se
 | Variable | What |
 |---|---|
 | `PARITY_ISSUER` | The test app's issuer |
-| `PARITY_APP_KEY` | The test app's own key. It needs the privileges to make people (`users.passwords:reset`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`), read and set the payer (`billing:read`, `billing:manage`) and set and delete flags (`flags.flags:read`, `flags.flags:write`, `FLAG_DELETE`) |
+| `PARITY_APP_KEY` | The test app's own key. It needs the privileges to make people (`users.passwords:reset`, `users:read`, `users:write`, `workspace:read`, `workspace:write`), read and set the payer (`billing:read`, `billing:manage`) and set and delete flags (`flags.flags:read`, `flags.flags:write`, `flags:delete`) |
 | `PARITY_HARNESS` | Optional. The address of a small local helper for what only the app's developer does. Without it the specs that need it are skipped |
 | `PARITY_INBOX_DOMAIN` | Optional. A domain whose mail the run can read, for the invite |
 
