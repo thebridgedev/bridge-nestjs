@@ -37,8 +37,8 @@ export class TeamAdminController {
   constructor(private readonly bridgeHttpService: BridgeHttpService) {}
 
   @Post('update-role')
-  @RequireFeatureFlag('manage-team') // people: flag ruled privileges contains "USER_WRITE"
-  @RequirePrivilege('USER_WRITE')    // API tokens only: the token's scope
+  @RequireFeatureFlag('manage-team') // people: flag ruled privileges contains "users:write"
+  @RequirePrivilege('users:write')    // API tokens only: the token's scope
   async updateRole(
     @Body() body: { userId: string; role: string; tenantId: string },
     @Req() req: Request,

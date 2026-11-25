@@ -9,7 +9,7 @@ sidebar:
 
 Feature flags are the standard way to decide who gets a route, an API endpoint or a feature. A flag's rule changes without a release and applies live when someone's role or plan changes. Every gate on a person is a flag. `@RequirePrivilege()` is separate: it scopes API tokens only, for machine callers ([How roles & privileges work](/auth/roles/how-it-works/)).
 
-When the rule is about who someone is, prefer a **privilege** rule (`privileges contains "BETA_REPORTS"`) over a **role** rule (`user.role eq "ADMIN"`). A privilege rule keeps working when roles are renamed or reshuffled; which privileges a role has is only "the default setup" and differs per app. Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing the rule; `contains` is exact membership.
+When the rule is about who someone is, prefer a **privilege** rule (`privileges contains "reports:beta"`) over a **role** rule (`user.role eq "ADMIN"`). A privilege rule keeps working when roles are renamed or reshuffled; which privileges a role has is only "the default setup" and differs per app. Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing the rule; `contains` is exact membership.
 
 ## `@RequireFlag` / `BridgeFlagsService`: nothing to wire
 
@@ -24,12 +24,12 @@ import { RequireFlag, BridgeFlagGuard } from '@nebulr-group/bridge-nestjs/flags'
 @UseGuards(BridgeAuthGuard, BridgeFlagGuard) // auth first, so the token is verified
 export class ReportsController {
   @Get('beta')
-  @RequireFlag('beta_reports') // rule: privileges contains "BETA_REPORTS"
+  @RequireFlag('beta_reports') // rule: privileges contains "reports:beta"
   getBetaReports() { /* … */ }
 }
 ```
 
-Continuing the [enterprise example](/auth/roles/common-setups/): a flag `beta_reports` targeted at the privilege (`privileges contains "BETA_REPORTS"`), or at the role (`user.role eq "ENTERPRISE_BETA"`), evaluates correctly with zero code changes.
+Continuing the [enterprise example](/auth/roles/common-setups/): a flag `beta_reports` targeted at the privilege (`privileges contains "reports:beta"`), or at the role (`user.role eq "ENTERPRISE_BETA"`), evaluates correctly with zero code changes.
 
 Only verified values count: the attributes come from the token `BridgeAuthGuard` verified, never from the `x-bridge-context` header or a `role` on `req.user`. See [Target by plan, privilege or role](/feature-flags/targeting/by-plan-or-role/) for the full attribute list.
 

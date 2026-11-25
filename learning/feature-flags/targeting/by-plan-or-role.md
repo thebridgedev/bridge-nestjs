@@ -21,7 +21,7 @@ From the signed-in user's token, verified by `BridgeAuthGuard`:
 | `user.id` | the token's `sub` | the signed-in user's id |
 | `user.email` | the token's `email` | `jane@acme.com` |
 | `tenant.id` | the token's `tid` | the current workspace's id |
-| `privileges` | the token's `privileges` | the user's privilege list, e.g. `USER_READ` |
+| `privileges` | the token's `privileges` | the user's privilege list, e.g. `users:read` |
 
 From the workspace's billing, read from Bridge and cached per workspace:
 

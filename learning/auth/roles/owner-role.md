@@ -13,7 +13,7 @@ Every workspace (called a *tenant* in the API) has an `OWNER` role, and Bridge e
 - **You can't demote the last owner.** Changing a user's role away from `OWNER` is blocked if they're the only owner left in the workspace; the API rejects it with "There must be at least one owner for this workspace." Promote someone else to `OWNER` first, then demote the original one.
 - **The `OWNER` role itself can't be deleted, and its key can't be changed to something else.** You can still edit its name, description, or (carefully) its privilege set.
 
-`OWNER` is granted the broadest default privilege set (`AUTHENTICATED`, `USER_READ`, `USER_WRITE`, `TENANT_READ`, `TENANT_WRITE`). Treat it as the role for whoever is ultimately accountable for the workspace, not a role you hand out casually.
+`OWNER` is granted the broadest default privilege set (`app:use`, `users:read`, `users:write`, `workspace:read`, `workspace:write`). Treat it as the role for whoever is ultimately accountable for the workspace, not a role you hand out casually.
 
 ## What this means for your backend
 

@@ -124,7 +124,7 @@ BRIDGE_DEBUG=true
 
 ### Route rules reference
 
-A route rule's `privilege` says whether the route needs a signed-in caller (`'ANONYMOUS'` or `'AUTHENTICATED'`). Who gets the route is a flag: the rule's `featureFlag`, or `@RequireFeatureFlag` on the handler. The flag's rule says why (a privilege such as `privileges contains "USER_WRITE"`, a plan feature, a rollout).
+A route rule's `privilege` says whether the route needs a signed-in caller (`'ANONYMOUS'` or `'AUTHENTICATED'`). Who gets the route is a flag: the rule's `featureFlag`, or `@RequireFeatureFlag` on the handler. The flag's rule says why (a privilege such as `privileges contains "users:write"`, a plan feature, a rollout).
 
 ```typescript
 interface RouteRule {
@@ -161,7 +161,7 @@ BridgeModule.forRoot({
       // Any valid token (user JWT or API token)
       { path: '/api/status', privilege: 'AUTHENTICATED' },
 
-      // Who gets it is a flag (e.g. `manage-users` ruled `privileges contains "USER_WRITE"`)
+      // Who gets it is a flag (e.g. `manage-users` ruled `privileges contains "users:write"`)
       { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
       { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' },
 

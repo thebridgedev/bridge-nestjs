@@ -58,7 +58,7 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
           { path: '/webhooks/*', privilege: 'ANONYMOUS' },
 
           // Who gets a route is a flag; its rule says why
-          // (e.g. `manage-users` ruled `privileges contains "USER_WRITE"`)
+          // (e.g. `manage-users` ruled `privileges contains "users:write"`)
           { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
         ],
       },
@@ -142,9 +142,9 @@ import { Request } from 'express';
 @Controller('api/users')
 export class ApiUsersController {
   // Accept both user JWTs and API tokens (default behavior)
-  // API tokens only: an x-api-key caller must carry USER_READ. Not a gate on a person.
+  // API tokens only: an x-api-key caller must carry users:read. Not a gate on a person.
   @Get()
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   listUsers(@Req() req: Request) {
     const apiToken = req.bridgeApiToken; // Set when using x-api-key
     const user = req.bridgeUser;         // Set when using Bearer token
@@ -154,7 +154,7 @@ export class ApiUsersController {
   // Only accept API tokens; user JWTs get 401
   @Get('external')
   @AcceptAuth('api_token')
-  @RequirePrivilege('USER_READ')
+  @RequirePrivilege('users:read')
   externalList() {
     // ...
   }

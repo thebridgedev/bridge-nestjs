@@ -4,7 +4,7 @@ You are integrating The Bridge into a NestJS application. This adds JWT-based au
 
 ## The one rule for app code
 
-**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "USER_WRITE"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
+**Every gate in app code is a flag.** A link, a page, a button, an endpoint: if some people get it and others do not, the code asks a flag, and the flag's rule says why: a privilege (`privileges contains "users:write"`), a plan feature (`bridge:billing.entitlement.analytics eq true`) or a rollout. App code never reads a role, a privilege list, the plan or a plan feature to decide what someone may see or do.
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
@@ -170,7 +170,7 @@ BridgeModule.forRoot({
 - `privilege` — `'ANONYMOUS'` or `'AUTHENTICATED'` (see below).
 - `featureFlag` — optional flag requirement (`'key'`, `{ any: [...] }` or `{ all: [...] }`); the flag's rule says who gets the route. An off flag refuses with 402 `FEATURE_NOT_IN_PLAN` / 403 `FEATURE_NOT_PERMITTED` / 403 `FEATURE_OFF`.
 
-> The rule object carries **`privilege` and `featureFlag`** — and nothing else. There are no `public`, `role`, or `methods` fields: public is `privilege: 'ANONYMOUS'` (or `@Public()`). The older plan-list and entitlement fields were removed; a config that still passes one, or a privilege key such as `'USER_READ'`, fails at startup with an error naming the flag to use instead.
+> The rule object carries **`privilege` and `featureFlag`** — and nothing else. There are no `public`, `role`, or `methods` fields: public is `privilege: 'ANONYMOUS'` (or `@Public()`). The older plan-list and entitlement fields were removed; a config that still passes one, or a privilege key such as `'users:read'`, fails at startup with an error naming the flag to use instead.
 
 **Alternative:** the `@Public()` decorator marks an individual controller or handler public and overrides any rule. Prefer the centralized `rules` config for consistency, and reach for `@Public()` when you need a single handler on an otherwise-protected path (e.g. a public `GET` next to a protected `POST` on the same route).
 
@@ -184,7 +184,7 @@ type RoutePrivilege =
   | 'AUTHENTICATED'; // any valid token (user JWT or API token)
 ```
 
-Anything finer than "signed in" is a flag: `featureFlag` on the rule, ruled on a privilege (`privileges contains "USER_READ"`), a plan feature or a rollout.
+Anything finer than "signed in" is a flag: `featureFlag` on the rule, ruled on a privilege (`privileges contains "users:read"`), a plan feature or a rollout.
 
 ```ts
 guard: {
@@ -193,12 +193,12 @@ guard: {
   rules: [
     { path: '/health', privilege: 'ANONYMOUS' },
     { path: '/api/status', privilege: 'AUTHENTICATED' },
-    { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },        // rule: privileges contains "USER_READ"
-    { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' }, // rule: privileges contains "TENANT_WRITE"
+    { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },        // rule: privileges contains "users:read"
+    { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' }, // rule: privileges contains "workspace:write"
     { path: '/premium/*', privilege: 'AUTHENTICATED', featureFlag: 'premium' },          // rule: bridge:billing.entitlement.premium eq true
     // GraphQL operations
     { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
-    { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', featureFlag: 'delete-users' }, // rule: privileges contains "USER_WRITE"
+    { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', featureFlag: 'delete-users' }, // rule: privileges contains "users:write"
   ],
 }
 ```
@@ -238,7 +238,7 @@ export class DecksController {
 - `tenantId` — current tenant/workspace ID
 - `appId` — app ID from the token (`aid` claim)
 - `role` — user's role in the current tenant (e.g. `'OWNER'`, `'ADMIN'`, `'USER'`); for display — gates are flags
-- `privileges` — array of privilege strings (e.g. `['AUTHENTICATED', 'USER_READ']`)
+- `privileges` — array of privilege strings (e.g. `['app:use', 'users:read']`)
 - `onboarded`, `multiTenantAccess`, `scope`
 
 **`BridgeTenant` properties:**
@@ -254,24 +254,24 @@ import { BridgeAuthGuard, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs
 
 @Controller('admin')
 @UseGuards(BridgeAuthGuard)   // omit when guard.global is true
-@RequireFeatureFlag('admin-area')          // rule: privileges contains "USER_WRITE"
+@RequireFeatureFlag('admin-area')          // rule: privileges contains "users:write"
 export class AdminController {
   @Get('dashboard')
   getDashboard() {}
 
   @Get('settings')
-  @RequireFeatureFlag('admin-settings')    // rule: privileges contains "TENANT_WRITE"
+  @RequireFeatureFlag('admin-settings')    // rule: privileges contains "workspace:write"
   getSettings() {}
 }
 ```
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "USER_WRITE"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
 
 ## API tokens and dual auth
 
 The guard accepts two token types: a user JWT via `Authorization: Bearer <token>`, and a server-to-server API token via the `x-api-key` header. When an API token is verified its claims are attached to `req.bridgeApiToken` (`ApiTokenClaims` re-exported from auth-core).
 
-- `@RequirePrivilege('USER_READ')` — the scope an **API token** must carry. API tokens only: a signed-in user is not checked against it (gate people with a flag).
+- `@RequirePrivilege('users:read')` — the scope an **API token** must carry. API tokens only: a signed-in user is not checked against it (gate people with a flag).
 - `@AcceptAuth('jwt' | 'api_token' | 'both')` — restrict which token type a route accepts. Default is `'both'`.
 
 ```ts
@@ -283,7 +283,7 @@ import { Request } from 'express';
 export class IntegrationsController {
   @Post('sync')
   @AcceptAuth('api_token')      // user JWTs get 401 here
-  @RequirePrivilege('TENANT_WRITE')
+  @RequirePrivilege('workspace:write')
   syncData(@Req() req: Request) {
     const { tenantId } = req.bridgeApiToken!;
     return this.syncService.run(tenantId);
