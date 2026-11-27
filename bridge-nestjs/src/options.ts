@@ -70,9 +70,15 @@ export interface BridgeModuleOptions {
   webhookSecrets?: string | string[];
   /** Log what the guard decides. Never logs a credential. @default false */
   debug?: boolean;
-  /** How far behind the revocation list may fall before checks answer 503. @default 300000 */
+  /**
+   * How far behind the revocation list may fall before checks answer 503
+   * (fail closed: a removed person is never let in on an old list). @default 300000 (5 minutes)
+   */
   maxLagMs?: number;
-  /** The tighter limit for writes. @default 30000 */
+  /**
+   * The tighter limit for writes and `@Strict()` reads, the same as Bridge's own
+   * servers use. @default 90000 (90 seconds)
+   */
   strictLagMs?: number;
   /** How often new revocations are fetched. @default 2000 */
   revocationIntervalMs?: number;
@@ -105,6 +111,10 @@ export const BRIDGE_DEFAULTS = {
   manageRoute: '/subscription',
   defaultAccess: 'protected' as const,
   strictWrites: true,
+  /** Reads are refused once the revocation list is more than 5 minutes behind. */
+  maxLagMs: 300_000,
+  /** Writes and `@Strict()` reads once it is more than 90 seconds behind, as Bridge's Access Layer does. */
+  strictLagMs: 90_000,
 } as const;
 
 /** The resolved module options. */

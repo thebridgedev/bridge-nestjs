@@ -150,13 +150,13 @@ export async function createSignedIssuer() {
     usage,
     calls,
     /** A person's access token, as Bridge signs it. */
-    async personToken(overrides: JWTPayload = {}, options: { expiresIn?: string | number; issuer?: string; audience?: string } = {}): Promise<string> {
+    async personToken(overrides: JWTPayload = {}, options: { expiresIn?: string | number; issuer?: string; audience?: string; issuedAt?: number } = {}): Promise<string> {
       return new SignJWT({ aid: APP, azp: APP, tid: 'ws-alpha', sid: 'sess-1', jti: `tok-${Math.random().toString(36).slice(2)}`, wst: 'active', ...overrides })
         .setProtectedHeader({ alg: 'PS256', kid: 'acme-key-1', typ: 'at+jwt' })
         .setIssuer(options.issuer ?? ISSUER)
         .setAudience(options.audience ?? AUDIENCE)
         .setSubject(typeof overrides.sub === 'string' ? overrides.sub : 'user-alice')
-        .setIssuedAt()
+        .setIssuedAt(options.issuedAt)
         .setExpirationTime(options.expiresIn ?? '5m')
         .sign(token.privateKey);
     },

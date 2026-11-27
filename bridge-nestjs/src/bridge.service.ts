@@ -1,4 +1,4 @@
-import { Inject, Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, Optional } from '@nestjs/common';
 import type {
   Actor,
   BridgeServer,
@@ -8,7 +8,7 @@ import type {
   VerifyOptions,
 } from '@nebulr-group/bridge-auth-core/server';
 import { workspaceInHeaders } from './flags/key-workspace';
-import { BRIDGE_SERVER } from './options';
+import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleOptions } from './options';
 import { bridgeStateOf } from './request-context';
 
 /**
@@ -18,7 +18,10 @@ import { bridgeStateOf } from './request-context';
  */
 @Injectable()
 export class BridgeService implements OnModuleDestroy {
-  constructor(@Inject(BRIDGE_SERVER) private readonly server: BridgeServer) {}
+  constructor(
+    @Inject(BRIDGE_SERVER) private readonly server: BridgeServer,
+    @Optional() @Inject(BRIDGE_OPTIONS) private readonly options?: BridgeModuleOptions,
+  ) {}
 
   /** Resolves once the issuer's metadata is read and token checks are set up. */
   get ready(): Promise<void> {
@@ -88,6 +91,21 @@ export class BridgeService implements OnModuleDestroy {
   /** Sends what is counted now. */
   flush(): Promise<void> {
     return this.server.usage.flush();
+  }
+
+  /**
+   * Whether this server can serve on its copy of the revocation list, for a
+   * health check: `reads` while it is at most `maxLagMs` behind (5 minutes),
+   * `writes` while at most `strictLagMs` (90 seconds). Past either limit the
+   * guard refuses those requests with 503, never yes.
+   */
+  revocationHealth(): { ready: boolean; lagMs: number | null; reads: boolean; writes: boolean; maxLagMs: number; strictLagMs: number } {
+    const status = this.server.status();
+    const maxLagMs = this.options?.maxLagMs ?? BRIDGE_DEFAULTS.maxLagMs;
+    const strictLagMs = this.options?.strictLagMs ?? BRIDGE_DEFAULTS.strictLagMs;
+    const ready = status?.ready ?? false;
+    const lagMs = status !== null && Number.isFinite(status.lagMs) ? status.lagMs : null;
+    return { ready, lagMs, reads: ready && lagMs !== null && lagMs <= maxLagMs, writes: ready && lagMs !== null && lagMs <= strictLagMs, maxLagMs, strictLagMs };
   }
 
   /** How the revocation list is followed, for a health check. Null before setup. */

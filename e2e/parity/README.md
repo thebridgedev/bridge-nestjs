@@ -18,6 +18,7 @@ It is skipped unless it is set up. Run it in a container, from the repository ro
 | `metering.parity.spec.ts` | What `@Meter` counts reaches Billing's usage for the caller's workspace |
 | `webhook.parity.spec.ts` | A delivery Bridge made is checked by `verifyWebhook` (signature byte for byte, timestamp), taken by the demo's route, and its replay arrives with the same event id and is handled once |
 | `revocation.parity.spec.ts` | A removed member's token is refused within seconds |
+| `access-taken-away.parity.spec.ts` | TBP-240: a role change (ADMIN to MEMBER) refuses the old token within seconds and a renewed one is taken; a suspended person is refused within 10 seconds and cannot renew, then resumed; the health check reports the fail-closed limits (5 minutes, 90 seconds) |
 
 ## What the suite needs
 

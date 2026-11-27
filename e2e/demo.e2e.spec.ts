@@ -125,6 +125,123 @@ describe('demo app against a signing issuer', () => {
   });
 });
 
+/**
+ * TBP-240's story on the app's own server: access Bridge takes away is refused by the demo within seconds, and the demo
+ * fails closed when it cannot follow the revocation list. Started with the issuer only, as in local development.
+ */
+describe('demo app: access taken away reaches the app\'s own server (TBP-240)', () => {
+  let issuer: SignedIssuer;
+  let app: INestApplication;
+
+  beforeAll(async () => {
+    issuer = await createSignedIssuer();
+    // Nothing but the issuer (and the in-memory network): no app key, no cache, no extra service.
+    app = await startDemo({ issuer: issuer.issuer, fetch: issuer.fetch, revocationIntervalMs: 50, guard: { global: true } });
+    await app.get(BridgeService).ready;
+    issuer.setFlags('*', [{ key: 'tickets', value: true }, { key: 'tickets-create', value: true }]);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  const me = (bearer: string) => request(app.getHttpServer()).get('/me').set('authorization', `Bearer ${bearer}`);
+  const took = async (check: () => Promise<void>): Promise<number> => {
+    const start = Date.now();
+    await eventually(check, 10_000);
+    return Date.now() - start;
+  };
+
+  it('A-C: a role change refuses the old token within seconds; the fresh one gets the Viewer\'s gates; others keep working', async () => {
+    // Anna is an Editor: Bridge's flag rule for creating tickets (on the role) says yes.
+    issuer.setFlags('user-anna', [{ key: 'tickets', value: true }, { key: 'tickets-create', value: true }]);
+    const editor = await issuer.personToken({ sub: 'user-anna', sid: 'sess-anna', role: 'EDITOR' });
+    const sam = await issuer.personToken({ sub: 'user-sam', sid: 'sess-sam', role: 'ADMIN' });
+    const create = (bearer: string) => request(app.getHttpServer()).post('/tickets').set('authorization', `Bearer ${bearer}`).send({ title: 'by Anna' });
+    expect((await create(editor)).status).toBe(201);
+
+    // Sam changes Anna from Editor to Viewer in ws-alpha: Accounts writes this entry in the same transaction.
+    await issuer.revoke('accounts', { kind: 'person', id: 'user-anna', workspace: 'ws-alpha', before: Date.now() });
+    issuer.setFlags('user-anna', [{ key: 'tickets', value: true }, { key: 'tickets-create', value: false }]);
+    const ms = await took(async () => {
+      const answer = await me(editor);
+      expect(answer.status).toBe(401);
+      expect(answer.body.code).toBe('revoked');
+    });
+    expect(ms).toBeLessThan(10_000);
+    expect((await create(editor)).status).toBe(401);
+    expect((await me(sam)).status).toBe(200);
+
+    // The browser's SDK renews the token; Bridge issues it with the Viewer role, whose gates say no to creating.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const viewer = await issuer.personToken({ sub: 'user-anna', sid: 'sess-anna', role: 'VIEWER' });
+    expect((await me(viewer)).body).toMatchObject({ personId: 'user-anna', workspaceId: 'ws-alpha' });
+    expect((await request(app.getHttpServer()).get('/tickets').set('authorization', `Bearer ${viewer}`)).status).toBe(200);
+    expect((await create(viewer)).body).toMatchObject({ statusCode: 403, code: 'FEATURE_OFF', flag: 'tickets-create' });
+  });
+
+  it('D: suspending a User across the app refuses their tokens in every workspace within 10 seconds', async () => {
+    const alpha = await issuer.personToken({ sub: 'user-ben', sid: 'sess-ben-1', tid: 'ws-alpha' });
+    const beta = await issuer.personToken({ sub: 'user-ben', sid: 'sess-ben-2', tid: 'ws-beta' });
+    const sam = await issuer.personToken({ sub: 'user-sam', sid: 'sess-sam-2', role: 'ADMIN' });
+    expect((await me(alpha)).status).toBe(200);
+    expect((await me(beta)).status).toBe(200);
+
+    // What Accounts writes when the app owner suspends Ben (no workspace: the whole app).
+    await issuer.revoke('accounts', { kind: 'person', id: 'user-ben', before: Date.now() });
+    const ms = await took(async () => {
+      expect((await me(alpha)).status).toBe(401);
+      expect((await me(beta)).status).toBe(401);
+    });
+    expect(ms).toBeLessThan(10_000);
+    // A write too, and another person is not touched.
+    expect((await request(app.getHttpServer()).post('/tickets').set('authorization', `Bearer ${beta}`).send({ title: 'x' })).status).toBe(401);
+    expect((await me(sam)).status).toBe(200);
+  });
+
+  it('fails closed on the defaults: writes refused 90 s and reads 5 min after the list was last current; the health check says so', async () => {
+    const anna = await issuer.personToken({ sub: 'user-cleo', sid: 'sess-cleo' }, { expiresIn: '1h' });
+    const health = async () => (await request(app.getHttpServer()).get('/')).body;
+    await eventually(async () => expect((await health()).current).toEqual({ reads: true, writes: true }));
+    expect((await health()).limits).toEqual({ readsMs: 300_000, writesMs: 90_000 });
+
+    const real = Date.now.bind(Date);
+    let skew = 0;
+    const clock = jest.spyOn(Date, 'now').mockImplementation(() => real() + skew);
+    try {
+      issuer.setLanesDown(true);
+      skew = 80_000;
+      // 80 seconds behind: still within both limits.
+      expect((await request(app.getHttpServer()).post('/tickets').set('authorization', `Bearer ${anna}`).send({ title: 'in time' })).status).toBe(201);
+
+      skew = 95_000;
+      await eventually(async () => {
+        const write = await request(app.getHttpServer()).post('/tickets').set('authorization', `Bearer ${anna}`).send({ title: 'late' });
+        expect(write.status).toBe(503);
+        expect(write.headers['retry-after']).toBeDefined();
+        expect(write.body).toMatchObject({ statusCode: 503, error: 'Service Unavailable' });
+      });
+      expect((await me(anna)).status).toBe(200);
+      expect((await health()).current).toEqual({ reads: true, writes: false });
+
+      skew = 305_000;
+      await eventually(async () => expect((await me(anna)).status).toBe(503));
+      const now = await health();
+      expect(now.current).toEqual({ reads: false, writes: false });
+      expect(now.ok).toBe(false);
+
+      // Back on the list: served again, without a restart.
+      issuer.setLanesDown(false);
+      skew = 0;
+      await eventually(async () => expect((await me(anna)).status).toBe(200));
+      await eventually(async () => expect((await health()).current).toEqual({ reads: true, writes: true }));
+    } finally {
+      issuer.setLanesDown(false);
+      clock.mockRestore();
+    }
+  });
+});
+
 const realIssuer = process.env.E2E_ISSUER;
 (realIssuer ? describe : describe.skip)('demo app against a real issuer (E2E_ISSUER)', () => {
   let app: INestApplication;

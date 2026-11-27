@@ -1,12 +1,12 @@
 import { DynamicModule, Global, Logger, Module, Provider } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { createBridgeServer, type BridgeServer } from '@nebulr-group/bridge-auth-core/server';
+import { createBridgeServer, type BridgeServer, type BridgeServerOptions } from '@nebulr-group/bridge-auth-core/server';
 import { BridgeService } from './bridge.service';
 import { BridgeAuthGuard } from './guards/bridge-auth.guard';
 import { BridgeManagementService } from './management/management.service';
 import { BridgeQuotaInterceptor } from './quota/quota.interceptor';
 import { BridgeQuotaService } from './quota/quota.service';
-import { BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleAsyncOptions, type BridgeModuleOptions } from './options';
+import { BRIDGE_DEFAULTS, BRIDGE_OPTIONS, BRIDGE_SERVER, type BridgeModuleAsyncOptions, type BridgeModuleOptions } from './options';
 import { BridgeMeterInterceptor } from './usage/meter';
 import { BridgeWebhookGuard } from './webhooks/webhook.guard';
 
@@ -26,25 +26,33 @@ export function resolveBridgeOptions(options: Partial<BridgeModuleOptions> = {},
   };
 }
 
-function serverFor(options: BridgeModuleOptions): BridgeServer {
+/**
+ * What the module hands auth-core. The revocation limits are always set here
+ * (reads 5 minutes, writes 90 seconds, as Bridge's own Access Layer), so the
+ * plugin's promise does not move with auth-core's own defaults.
+ */
+export function serverOptionsFor(options: BridgeModuleOptions, logger: Pick<Logger, 'debug'> = new Logger('Bridge')): BridgeServerOptions {
   if (typeof options.issuer !== 'string' || options.issuer === '') {
     throw new Error('BridgeModule needs the issuer: pass `issuer`, or set BRIDGE_ISSUER. It is the app\'s issuer, as the browser SDK takes it.');
   }
-  const logger = new Logger('Bridge');
-  return createBridgeServer({
+  return {
     issuer: options.issuer,
     ...(options.appKey ? { appKey: options.appKey } : {}),
     ...(options.audience ? { audience: options.audience } : {}),
     ...(options.fetch ? { fetch: options.fetch } : {}),
-    ...(options.maxLagMs === undefined ? {} : { maxLagMs: options.maxLagMs }),
-    ...(options.strictLagMs === undefined ? {} : { strictLagMs: options.strictLagMs }),
+    maxLagMs: options.maxLagMs ?? BRIDGE_DEFAULTS.maxLagMs,
+    strictLagMs: options.strictLagMs ?? BRIDGE_DEFAULTS.strictLagMs,
     ...(options.revocationIntervalMs === undefined ? {} : { revocationIntervalMs: options.revocationIntervalMs }),
     ...(options.usageFlushMs === undefined ? {} : { usageFlushMs: options.usageFlushMs }),
     ...(options.usageStore === undefined ? {} : { usageStore: options.usageStore }),
     ...(options.maxQueuedReports === undefined ? {} : { maxQueuedReports: options.maxQueuedReports }),
     ...(options.maxQueuedAgeMs === undefined ? {} : { maxQueuedAgeMs: options.maxQueuedAgeMs }),
     log: (message, details) => (options.debug ? logger.debug(details === undefined ? message : `${message} ${JSON.stringify(details)}`) : undefined),
-  });
+  };
+}
+
+function serverFor(options: BridgeModuleOptions): BridgeServer {
+  return createBridgeServer(serverOptionsFor(options));
 }
 
 /**

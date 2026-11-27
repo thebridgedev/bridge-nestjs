@@ -58,9 +58,9 @@ The guard checks `Authorization: Bearer <token>` (a person's access token) or `x
 
 - the signature against your app's key set, the issuer, the audience and the expiry;
 - your app's revocation list, followed every 2 seconds: a session that ended, a member who was removed or a key that was revoked is refused within seconds, not when the token expires;
-- writes (POST, PUT, PATCH, DELETE) against a list at most 30 seconds behind. Mark a sensitive read `@Strict()`, or relax a write with `@Strict(false)`.
+- writes (POST, PUT, PATCH, DELETE) against a list at most 90 seconds behind, as Bridge's own servers. Mark a sensitive read `@Strict()`, or relax a write with `@Strict(false)`.
 
-While Bridge cannot be checked the guard answers `503` with `Retry-After`, never yes. A refused credential gets `401` with `WWW-Authenticate`.
+The guard fails closed. While Bridge cannot be checked, or once its copy of the list is more than 5 minutes behind (`maxLagMs`; 90 seconds for writes, `strictLagMs`), it answers `503` with `Retry-After`, never yes, so a removed or suspended person is never let in on an old list. `BridgeService.revocationHealth()` says whether reads and writes are served right now, for a health check. A refused credential gets `401` with `WWW-Authenticate`.
 
 `@AcceptAuth('jwt')` takes only a person's token; `@AcceptAuth('api_token')` only a key.
 

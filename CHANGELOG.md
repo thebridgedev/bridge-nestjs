@@ -4,7 +4,13 @@
 
 Needs `@nebulr-group/bridge-auth-core` 1.0.0-alpha.14.
 
+### Changed
+
+- **Writes fail closed after 90 seconds, as Bridge's own servers.** The module now always hands auth-core its revocation limits: reads are refused (503) once the app's copy of the revocation list is more than 5 minutes behind (`maxLagMs`), writes and `@Strict()` reads once it is more than 90 seconds behind (`strictLagMs`, was auth-core's 30 seconds), the same as Bridge's Access Layer. Both can still be set. (TBP-240)
+
 ### Added
+
+- **`BridgeService.revocationHealth()`** says whether reads and writes are served right now (`reads`, `writes`, the lag and both limits), for a health check; the demo's `/` shows it as `current` and `limits`. (TBP-240)
 
 - **A key can name the workspace whose plan its flag results use.** A request with an app key and a `Bridge-Workspace` header (or `x-tenant-id`, as the 0.x versions took it) gets the flag results of that workspace, in the guard and in `BridgeService.flags`. Only a valid workspace id is passed on; a key that names none, or an invalid one, gets its own results as before. A person's request is not affected.
 - **Flags on a public route.** A route nobody signed in to (`@Public()`) now reads flags: Bridge answers as it does for any visitor, with the flags you marked public and no others, so `@RequireFlag`, `@Flag` and `@Flags` work there and a flag that is not public gives `403 FEATURE_OFF` or its fallback. Nothing is sent with the question, so the app key never speaks for a stranger; a credential that does not check out on a public route is treated the same. `BridgeService.visitorFlags(hints)` gives the same results to code with no request (hints are facts your server knows, never what the caller sent), and `BridgeService.flags(request, hints)` does the same for an unauthenticated request. Before, such a route got an empty set and every gate refused. Needs the `@nebulr-group/bridge-auth-core` alpha that follows 1.0.0-alpha.11.

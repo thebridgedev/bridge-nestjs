@@ -61,7 +61,7 @@ npm run e2e:test     # the demo app end to end
 
 `demo/` shows the whole surface:
 
-- a public health check that reports whether the revocation list is current (`/`);
+- a public health check that reports whether the revocation list is current (`/`: `current.reads` and `current.writes`, with the limits it fails closed at);
 - the caller (`/me`);
 - flag-gated tickets, counted with `@Meter` (`/tickets`);
 - the team, read and managed as the caller with the management client (`/team/*`);
@@ -75,6 +75,28 @@ BRIDGE_APP_KEY=…              # "count this" and the management client
 BRIDGE_WEBHOOK_SECRETS=whsec_…
 BRIDGE_DEBUG=true
 ```
+
+### Demo: access taken away reaches this server (TBP-240)
+
+What a change in Bridge does to the demo's own server. Local development needs nothing but `BRIDGE_ISSUER`.
+
+Without Bridge, in memory (always runs): `npm run e2e:test`, the `TBP-240` block of `e2e/demo.e2e.spec.ts`:
+
+| Step | Shows |
+|---|---|
+| A-C | An Editor's token creates a ticket; after the role change to Viewer the old token is refused (`401 revoked`) within seconds; the renewed token reads tickets but creating is `403 FEATURE_OFF`; another person is untouched |
+| D | Suspending a person across the app refuses their tokens in every workspace within 10 seconds, writes included |
+| Fail closed | With the list unreachable: 80 s behind still served; past 90 s writes are `503`, reads still served, `/` says `current.writes: false`; past 5 minutes reads are `503` too and `/` says `ok: false`; back on the list, served again without a restart |
+
+On a real Bridge (stage, or a local bridge-server stack): `PARITY_ISSUER=… PARITY_APP_KEY=… npm run e2e:parity -- access-taken-away` runs `e2e/parity/access-taken-away.parity.spec.ts` (role change ADMIN to MEMBER, suspension and resume, health limits) on people and workspaces it makes for the run (see `e2e/parity/README.md` for the key's privileges).
+
+By hand, for a recorded demo:
+
+1. `cd demo && BRIDGE_ISSUER=<test app's issuer> BRIDGE_APP_KEY=<its key> npm run start` and open `http://localhost:3000/`: `current` is `{ reads: true, writes: true }`.
+2. Sign Anna in (the Svelte example or the hosted page) and call `GET /me` with her token: `200`.
+3. In the dashboard change Anna's role: within seconds `GET /me` with the old token is `401` (`code: revoked`); the browser renews and goes on with the new role.
+4. Suspend Anna from the dashboard: within 10 seconds every call with her token is `401`, and renewing fails.
+5. Block the demo's way to Bridge (for example, a firewall rule for the issuer's host): after 90 s `POST /tickets` is `503` and `/` says `writes: false`; after 5 minutes every signed-in call is `503` and `/` says `ok: false`.
 
 ## Publishing
 

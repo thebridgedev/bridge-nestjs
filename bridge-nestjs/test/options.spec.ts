@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
-import { BridgeModule, resolveBridgeOptions } from '../src';
+import { BridgeModule, BRIDGE_DEFAULTS, resolveBridgeOptions } from '../src';
+import { serverOptionsFor } from '../src/bridge.module';
 
 describe('module settings', () => {
   it('reads what is not given from the environment', () => {
@@ -16,5 +17,13 @@ describe('module settings', () => {
     } finally {
       if (previous !== undefined) process.env.BRIDGE_ISSUER = previous;
     }
+  });
+
+  it('fails closed on its own defaults: reads 5 minutes, writes 90 seconds, as Bridge\'s Access Layer (TBP-240)', () => {
+    expect(BRIDGE_DEFAULTS.maxLagMs).toBe(300_000);
+    expect(BRIDGE_DEFAULTS.strictLagMs).toBe(90_000);
+    const given = serverOptionsFor({ issuer: 'https://bridge.example.test/identity-access/apps/app-acme' });
+    expect(given).toMatchObject({ maxLagMs: 300_000, strictLagMs: 90_000 });
+    expect(serverOptionsFor({ issuer: 'https://bridge.example.test/identity-access/apps/app-acme', maxLagMs: 1000, strictLagMs: 100 })).toMatchObject({ maxLagMs: 1000, strictLagMs: 100 });
   });
 });
