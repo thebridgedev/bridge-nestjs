@@ -164,15 +164,17 @@ remove() { … }
 @Post('reports/export')
 @RequireQuota('exports')
 export() { … }
-
-@RequireEntitlement('analytics')
-@Get('analytics')
-analytics() { … }
 ```
 
 `@RequireQuota` holds one unit of the plan's limit before the handler runs, counts it when the handler answers 2xx and gives it back when it fails, so two requests never get the last unit. At the limit the answer is `402 QUOTA_EXCEEDED` (`metric`, `used`, `limit`, `fix`); a workspace locked for payment gets `402 BILLING_GATE_ENGAGED`; if Bridge cannot answer, `503 QUOTA_UNAVAILABLE`. With `current` (a gauge: tickets, projects) the gauge is set to your count after a 2xx; without it (a counter: exports, calls) the held unit is the count, and every request holds its own. `@SyncQuota` sets a gauge after a delete. A `metered` limit never refuses; the overage is billed. Needs `appKey`.
 
-`@RequireEntitlement(key)` refuses with `403 ENTITLEMENT_REQUIRED` unless the plan includes the feature; it asks the flag `bridge:billing.entitlement.<key>`. `BridgeQuotaService` does the same as plain calls: `hold`, `check`, `assertQuota`, `record`, `sync`, `assertEntitlement`.
+`BridgeQuotaService` does the same as plain calls: `hold`, `check`, `assertQuota`, `record`, `sync`.
+
+A plan feature (a yes/no the plan sells) is a flag like every other gate: rule it `bridge:billing.entitlement.<key> eq true` and put `@RequireFlag` on the handler; a workspace without it gets `402 FEATURE_NOT_IN_PLAN`.
+
+### Exceptions: a direct plan-feature check
+
+Only when the developer explicitly asks for no flag: `@RequireEntitlement('analytics')` on a handler or controller (or `BridgeQuotaService.assertEntitlement(req, key)`) refuses with `403 ENTITLEMENT_REQUIRED` unless the plan includes the feature. It asks the flag `bridge:billing.entitlement.<key>`, so it never reads the plan itself.
 
 ## Management client
 

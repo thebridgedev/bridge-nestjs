@@ -1,6 +1,6 @@
-# Bridge NestJS Integration
+# Bridge NestJS 1.0 — Integration
 
-You are integrating The Bridge into a NestJS application. This adds JWT-based authentication, tenant context, flag-gated access control, API-token scopes and plan limits to your API.
+You are adding The Bridge to a NestJS API with `@nebulr-group/bridge-nestjs` 1.0. The plugin checks every request's credential, gates endpoints with flags, holds and counts plan limits, calls Bridge's management API with the app's key, and checks Bridge's webhooks. This guide is the first-time setup; the topic guides (auth, feature-flags, billing, team) go deeper.
 
 ## The one rule for app code
 
@@ -8,18 +8,55 @@ You are integrating The Bridge into a NestJS application. This adds JWT-based au
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
-Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+Before calling the work done, run `npx @nebulr-group/bridge-cli@alpha check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
 
-In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+In NestJS, an endpoint is `@RequireFlag('…')` on the handler (or a route rule with `featureFlag`).
 
-## What this integration is
+## Which line you are on
 
-This is a **backend** integration: there are no UI components, no login screen, and no checkout redirect. The frontend (a Bridge frontend plugin — svelte/react/nextjs/angular) handles login and obtains the user's access token; this plugin verifies that token on every request and exposes the verified identity to your controllers and resolvers.
+1.0 is in alpha and works with the new Bridge only. Install from the `alpha` tag, never `latest`: the 0.x plugin talks to the old Bridge API and fails here.
 
-**The whole integration is two lines in `AppModule` and one environment variable.** A plan limit is one more decorator per handler (`bridge guide nestjs billing`). `bridge guide mechanisms` explains the model: the server decides, the client decorates, and a POST increments the limit.
+| You need | 1.0 |
+|---|---|
+| Settings | `BRIDGE_ISSUER` (required), `BRIDGE_APP_KEY` (server only, for counting, limits and the management client), `BRIDGE_WEBHOOK_SECRETS` (only if the app receives webhooks) |
+| Who is calling | `@CurrentActor()`: `{ kind, id, personId, workspaceId, sessionId, appId, standing }` |
+| A gate | `@RequireFlag('key')`, or a route rule with `featureFlag` |
+| A number | `@RequireQuota('metric')`, `@SyncQuota`, `BridgeQuotaService` |
+| "Count this" | `@Meter('metric')`, `BridgeService.count()` |
+| Bridge's API | `BridgeManagementService` |
+| Webhooks | `@BridgeWebhook()` with `@WebhookEvent()` |
+
+There is no API base URL and no app id setting: everything else (key set, revocation list, API addresses) is read from the issuer.
+
+## Prerequisites
+
+1. An app on Bridge. Over MCP: `create_app`, or `use_app` for an existing one. From a terminal (CLI 1.0, `npm i -g @nebulr-group/bridge-cli@alpha`): `bridge auth login`, then `bridge app create --name "<name>"` or `bridge app use <id>`.
+2. The app's issuer. Over MCP: `get_environment_info` (`issuer`). From a terminal: `bridge app get`, or let `bridge app setup --var BRIDGE_ISSUER --dotenv .env --url <frontend origin>` write it into the backend's `.env` (it also adds the frontend's origin as a browser origin and its `/auth` page as the email-links address).
+3. NestJS 10, 11 or 12, Node 20.19 or later.
+
+## Install
+
+```bash
+npm i @nebulr-group/bridge-nestjs@alpha
+```
+
+The plugin brings `@nebulr-group/bridge-auth-core` with it; the app does not depend on it directly.
+
+## Settings
+
+```bash
+# .env (server only; never in a browser bundle)
+BRIDGE_ISSUER=https://<bridge>/identity-access/apps/<app id>
+BRIDGE_APP_KEY=…            # bridge key create --name "api server" --privilege billing.usage:write
+BRIDGE_WEBHOOK_SECRETS=…    # the signing secret from the dashboard's Webhooks page; "new,old" during a rotation
+```
+
+`BRIDGE_APP_KEY` is an app key. Make one with `bridge key create --name "<what it is for>" --privilege billing.usage:write` (the secret is shown once; put it in the server's secrets). Counting usage and holding plan limits need `billing.usage:write`. Skip the key if the app neither counts, limits nor calls the management API.
+
+## Register the module
 
 ```ts
-// src/app.module.ts
+// app.module.ts
 import { Module } from '@nestjs/common';
 import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 
@@ -29,295 +66,68 @@ import { BridgeModule } from '@nebulr-group/bridge-nestjs';
 export class AppModule {}
 ```
 
-```env
-# .env
-BRIDGE_APP_ID=your-app-id
-# Only for a stage, local or self-hosted app:
-# BRIDGE_API_BASE_URL=https://api-stage.thebridge.dev
-```
+`forRoot()` reads `BRIDGE_ISSUER`, `BRIDGE_APP_KEY` and `BRIDGE_WEBHOOK_SECRETS` from the environment when they are not passed. With a config service, `BridgeModule.forRootAsync({ imports, inject, useFactory })` returns the same settings.
 
-NestJS does not read `.env` by itself, and `BridgeModule.forRoot()` reads the environment when `AppModule` is loaded, so the variables must be in the process before it starts: `node --env-file=.env dist/main.js` (Node 20.6+), your container's environment, or `forRootAsync` with `@nestjs/config` (below).
+With `guard: { global: true }` every route needs a valid credential unless it says `@Public()` or a rule opens it. Without it, put `@UseGuards(BridgeAuthGuard)` on each controller that needs one.
 
-## Decide first — how do routes get protected?
-
-Protection here is **declarative**. It lives in `BridgeModule.forRoot()` and in decorators, not in checks you write inside handlers. Make this decision before you touch a controller: retrofitting it means auditing every route in the app.
-
-| You want | Declare it |
-|---|---|
-| Every route protected unless stated otherwise | `guard: { global: true, defaultAccess: 'protected' }` in `BridgeModule.forRoot()` |
-| Only certain controllers protected | leave `guard.global` off, put `@UseGuards(BridgeAuthGuard)` on those controllers |
-| A whole path open to the world | a `rules` entry with `privilege: 'ANONYMOUS'` |
-| One handler open on an otherwise-protected path | `@Public()` on that handler (preferred for single endpoints: it follows the route wherever it is mounted) |
-| A path or handler only some people get (a privilege, a plan feature, a rollout) | `featureFlag` on its `rules` entry, or `@RequireFeatureFlag('…')` on the handler — the flag's rule says why; see `feature-flags-prompt.md` and, for plan features, `billing-prompt.md` |
-| A plan limit on the handler that creates the thing | `@RequireQuota('…')`, and `@SyncQuota` on the delete for things that exist — see `billing-prompt.md` |
-| An API token (machine caller) to hold a scope | `@RequirePrivilege('…')` — API tokens only; see `auth-prompt.md` |
-| Only server-to-server callers, or only browser users | `@AcceptAuth('api_token')` / `@AcceptAuth('jwt')` — see `auth-prompt.md` |
-
-**`guard.global` plus `defaultAccess` is the entire switch**, and it is the one choice here with real blast radius. Set `global: true` with `defaultAccess: 'protected'` and a route you forget about is closed; leave the guard off and a route you forget about is open to the internet. Everything else in the table is a per-route correction layered on top of that default.
-
-If the user has not said which they want, default to the global guard and mark exceptions — it fails safe.
-
-## Prerequisites
-
-- **appId** — your Bridge application ID. Get it from `bridge app get` or the Bridge dashboard.
-- **Package manager** — use whatever the project already uses (check for `bun.lock`, `pnpm-lock.yaml`, `yarn.lock`, or `package-lock.json`).
-- An existing NestJS app (`@nestjs/common` and `@nestjs/core` ^10, ^11 or ^12; a project from today's `nest new` is 12 and works as is).
-
-## Migration check
-
-Before starting, check if the project has existing auth.
-
-**Migrating from `@nebulr/nblocks-nestjs` or a custom nblocks integration:**
-
-| Old (nblocks) | New (bridge-nestjs) |
-|---|---|
-| `@nebulr/nblocks-nestjs` or custom JWT guards | `@nebulr-group/bridge-nestjs` package |
-| Custom `AuthGuard` with manual JWKS | `BridgeAuthGuard` (built-in JWKS handling) |
-| Custom `@User()` decorator | `@CurrentUser()` decorator |
-| Manual tenant extraction from JWT | `@CurrentTenant()` decorator |
-| `NBLOCKS_APP_ID` env var | `BRIDGE_APP_ID` env var |
-
-**Migration steps:**
-1. Remove old auth packages and custom guard/decorator files.
-2. Install bridge-nestjs (see Install section).
-3. Replace the `AppModule` auth-module imports with `BridgeModule.forRoot()`.
-4. Replace custom decorators with Bridge equivalents.
-5. Update environment variables.
-
-**If no existing auth is found:** skip migration steps, proceed directly to Install.
-
-## Install
-
-```bash
-npm i @nebulr-group/bridge-nestjs
-```
-
-Replace `npm i` with the project's package manager (`bun add`, `pnpm add`, `yarn add`).
-
-`@nebulr-group/bridge-auth-core` is a dependency of the plugin and installs with it; there is no second package to add by hand. All JWT and API-token verification is delegated to auth-core's `JwksService`.
-
-Peer dependencies (already present in any NestJS project):
-- `@nestjs/common` (^10.0.0 || ^11.0.0 || ^12.0.0)
-- `@nestjs/core` (^10.0.0 || ^11.0.0 || ^12.0.0)
-
-## Register the Bridge module
-
-Add `BridgeModule.forRoot()` to your root `AppModule`. The module is `@Global()` — register it once and inject its providers anywhere.
+If the app receives webhooks, create it with the raw body, so signatures are checked over the bytes as they arrived:
 
 ```ts
-import { Module } from '@nestjs/common';
-import { BridgeModule } from '@nebulr-group/bridge-nestjs';
-
-@Module({
-  imports: [
-    BridgeModule.forRoot({ guard: { global: true } }),
-    // ... your other modules
-  ],
-})
-export class AppModule {}
+// main.ts
+const app = await NestFactory.create(AppModule, { rawBody: true });
 ```
 
-**Key points:**
-- `appId`, `apiBaseUrl` and `debug` are read from `BRIDGE_APP_ID`, `BRIDGE_API_BASE_URL` and `BRIDGE_DEBUG` (`'true'`) when not passed; a value passed to `forRoot()` wins. With no app id either way, startup fails with a clear error naming `BRIDGE_APP_ID`. `forRootAsync` reads only what its factory returns.
-- `guard.global: true` registers `BridgeAuthGuard` as an `APP_GUARD`, so it runs on every route automatically.
-- `defaultAccess` is `'protected'` unless you say otherwise: any route without a matching rule requires a valid token.
-- The module fetches the JWKS and verifies JWTs internally (PS256). User JWTs verify against `{apiBaseUrl}/auth/.well-known/jwks.json`; API tokens against `{apiBaseUrl}/auth/account/app/.well-known/jwks.json`.
-- `apiBaseUrl` defaults to `https://api.thebridge.dev`.
-
-**With async configuration** (when the app uses `@nestjs/config`):
+## Public routes and the caller
 
 ```ts
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { Controller, Get } from '@nestjs/common';
+import { BridgeService, CurrentActor, Public, type Actor } from '@nebulr-group/bridge-nestjs';
 
-BridgeModule.forRootAsync({
-  imports: [ConfigModule],
-  inject: [ConfigService],
-  useFactory: (config: ConfigService) => ({
-    appId: config.get<string>('BRIDGE_APP_ID')!,
-    apiBaseUrl: config.get<string>('BRIDGE_API_BASE_URL') || undefined,
-    debug: config.get<string>('BRIDGE_DEBUG') === 'true',
-    guard: {
-      global: true,
-      defaultAccess: 'protected',
-    },
-  }),
-}),
-```
+@Controller()
+export class AppController {
+  constructor(private readonly bridge: BridgeService) {}
 
-**Docker / private-network note:** if the container can't reach the public `apiBaseUrl`, override the verification endpoints directly so they resolve over your internal network: `userJwksUrl` for user JWTs (verified against the Bridge JWKS) and `introspectionUrl` for API tokens (verified by POSTing them to the Bridge, since they are HS256-signed with a per-app secret your app never holds).
-
-## Mark public endpoints
-
-Declare public routes in the `rules` array using `privilege: 'ANONYMOUS'`. This keeps route protection visible in one place:
-
-```ts
-BridgeModule.forRoot({
-  guard: {
-    global: true,
-    defaultAccess: 'protected',
-    rules: [
-      { path: '/health', privilege: 'ANONYMOUS' },
-      { path: '/cards/*', privilege: 'ANONYMOUS' },
-      { path: '/webhooks/*', privilege: 'ANONYMOUS' },
-    ],
-  },
-}),
-```
-
-**RouteRule schema** (`{ path?, graphqlOperation?, privilege, featureFlag? }`):
-- `path` — REST URL wildcard pattern, matched against the **full** request path including any global prefix: with `app.setGlobalPrefix('api')` write `/api/cards/*`, not `/cards/*`. A rule that misses only because of the prefix logs a one-time warning naming the path to write. `*` matches the rest of the path: `/cards/*` matches `/cards/123`, `/cards/search`, etc.
-- `graphqlOperation` — GraphQL operation name (case-sensitive camelCase, e.g. `'listUsers'`). Provide `path`, `graphqlOperation`, or both.
-- `privilege` — `'ANONYMOUS'` or `'AUTHENTICATED'` (see below).
-- `featureFlag` — optional flag requirement (`'key'`, `{ any: [...] }` or `{ all: [...] }`); the flag's rule says who gets the route. An off flag refuses with 402 `FEATURE_NOT_IN_PLAN` / 403 `FEATURE_NOT_PERMITTED` / 403 `FEATURE_OFF`.
-
-> The rule object carries **`privilege` and `featureFlag`** — and nothing else. There are no `public`, `role`, or `methods` fields: public is `privilege: 'ANONYMOUS'` (or `@Public()`). The older plan-list and entitlement fields were removed; a config that still passes one, or a privilege key such as `'users:read'`, fails at startup with an error naming the flag to use instead.
-
-**Alternative:** the `@Public()` decorator marks an individual controller or handler public and overrides any rule. Prefer the centralized `rules` config for consistency, and reach for `@Public()` when you need a single handler on an otherwise-protected path (e.g. a public `GET` next to a protected `POST` on the same route).
-
-Scan the project's controllers to decide what should be public (health checks, public read-only content, webhook receivers) and add those to `rules`. Everything else stays protected by default.
-
-## Privilege levels — RoutePrivilege
-
-```ts
-type RoutePrivilege =
-  | 'ANONYMOUS'      // no authentication required
-  | 'AUTHENTICATED'; // any valid token (user JWT or API token)
-```
-
-Anything finer than "signed in" is a flag: `featureFlag` on the rule, ruled on a privilege (`privileges contains "users:read"`), a plan feature or a rollout.
-
-```ts
-guard: {
-  global: true,
-  defaultAccess: 'protected',
-  rules: [
-    { path: '/health', privilege: 'ANONYMOUS' },
-    { path: '/api/status', privilege: 'AUTHENTICATED' },
-    { path: '/users/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },        // rule: privileges contains "users:read"
-    { path: '/account/subscription/*', privilege: 'AUTHENTICATED', featureFlag: 'manage-billing' }, // rule: privileges contains "workspace:write"
-    { path: '/premium/*', privilege: 'AUTHENTICATED', featureFlag: 'premium' },          // rule: bridge:billing.entitlement.premium eq true
-    // GraphQL operations
-    { graphqlOperation: 'listUsers', privilege: 'AUTHENTICATED', featureFlag: 'manage-users' },
-    { graphqlOperation: 'deleteUser', privilege: 'AUTHENTICATED', featureFlag: 'delete-users' }, // rule: privileges contains "users:write"
-  ],
-}
-```
-
-## Access user and tenant context
-
-Use the `@CurrentUser()` and `@CurrentTenant()` parameter decorators to read the verified identity from the request. Both work in HTTP controllers and GraphQL resolvers.
-
-```ts
-import { Controller, Get, Post, Body } from '@nestjs/common';
-import { CurrentUser, CurrentTenant, BridgeUser, BridgeTenant } from '@nebulr-group/bridge-nestjs';
-
-@Controller('decks')
-export class DecksController {
-  constructor(private readonly decksService: DecksService) {}
-
-  @Post()
-  create(
-    @CurrentUser() user: BridgeUser,
-    @CurrentTenant() tenant: BridgeTenant,
-    @Body() createDeckDto: CreateDeckDto,
-  ) {
-    return this.decksService.create(createDeckDto, user.id, tenant.id);
+  @Public()
+  @Get('health')
+  health() {
+    const status = this.bridge.status();
+    return { ok: true, revocationList: status === null ? 'starting' : { ready: status.ready } };
   }
 
-  @Get()
-  findAll(@CurrentUser() user: BridgeUser) {
-    return this.decksService.findByUser(user.id);
+  @Get('me')
+  me(@CurrentActor() actor: Actor) {
+    return actor;
   }
 }
 ```
 
-**`BridgeUser` properties** (`transformJwtToBridgeUser` builds this from the verified JWT claims):
-- `id` — user ID (from the `sub` claim)
-- `email`, `emailVerified`, `username`
-- `fullName`, `givenName`, `familyName`, `locale`
-- `tenantId` — current tenant/workspace ID
-- `appId` — app ID from the token (`aid` claim)
-- `role` — user's role in the current tenant (e.g. `'OWNER'`, `'ADMIN'`, `'USER'`); for display — gates are flags
-- `privileges` — array of privilege strings (e.g. `['app:use', 'users:read']`)
-- `onboarded`, `multiTenantAccess`, `scope`
+The workspace a request acts in is `actor.workspaceId` (`@CurrentActor('workspaceId')`). It comes from the verified token only: never take a workspace id from the body, a query or a header the client sent.
 
-**`BridgeTenant` properties:**
-- `id`, `name`, `locale`, `logo`, `onboarded`
+## The frontend calls the API with the person's token
 
-## Gate who gets an endpoint — with a flag
+The guard reads `Authorization: Bearer <access token>` (a person) or `x-api-key` (a key). A SvelteKit frontend on `@nebulr-group/bridge-svelte` 1.0 calls the API with `bridgeFetch`, which adds the token and opens the upgrade dialog on a plan refusal; list the API's origin in the frontend's `tokenOrigins` when it runs on another origin. Allow the frontend's origin in Nest's own CORS settings (`app.enableCors({ origin: [...] })`).
 
-Who may call an endpoint is a flag, and the flag's rule says why. Put `@RequireFeatureFlag('…')` on a controller or handler; route-level decorators override controller-level ones (the guard uses NestJS `getAllAndOverride`).
+## Where to go next
 
-```ts
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
+- **auth** (`get_integration_guide topic=auth framework=nestjs`, `bridge guide nestjs auth`): the guard, keys, `@AcceptAuth`, `@Strict`.
+- **feature-flags**: `@RequireFlag`, `@Flag`, rules, public flags.
+- **billing**: plan limits, plan features, reading the workspace's plan, the refusals your frontend reads.
+- **team**: the workspace, members and invites from the server, webhooks for team changes.
+- Shared guides: `fit-together` (how roles, plans, limits and flags fit) before setting up any of them; `mechanisms` for how limits and upgrades work.
 
-@Controller('admin')
-@UseGuards(BridgeAuthGuard)   // omit when guard.global is true
-@RequireFeatureFlag('admin-area')          // rule: privileges contains "users:write"
-export class AdminController {
-  @Get('dashboard')
-  getDashboard() {}
+Checkout, the plan picker and the Stripe redirect live in the frontend plugin and in Bridge. Do not add payments code to the backend.
 
-  @Get('settings')
-  @RequireFeatureFlag('admin-settings')    // rule: privileges contains "workspace:write"
-  getSettings() {}
-}
-```
+## Verify
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+### Terminal checks
 
-## API tokens and dual auth
+1. `npm run build` passes.
+2. Start the app. `curl -i http://localhost:3000/health` answers `200`.
+3. `curl -i http://localhost:3000/me` with no token answers `401` with a `WWW-Authenticate` header.
+4. `npx @nebulr-group/bridge-cli@alpha check gates` lists nothing.
 
-The guard accepts two token types: a user JWT via `Authorization: Bearer <token>`, and a server-to-server API token via the `x-api-key` header. When an API token is verified its claims are attached to `req.bridgeApiToken` (`ApiTokenClaims` re-exported from auth-core).
+### Browser checks
 
-- `@RequirePrivilege('users:read')` — the scope an **API token** must carry. API tokens only: a signed-in user is not checked against it (gate people with a flag).
-- `@AcceptAuth('jwt' | 'api_token' | 'both')` — restrict which token type a route accepts. Default is `'both'`.
+1. Sign in in the frontend, then call `/me` from it (through `bridgeFetch`): the answer is the Actor, with a `workspaceId`.
 
-```ts
-import { Controller, Post, Req } from '@nestjs/common';
-import { AcceptAuth, RequirePrivilege } from '@nebulr-group/bridge-nestjs';
-import { Request } from 'express';
-
-@Controller('integrations')
-export class IntegrationsController {
-  @Post('sync')
-  @AcceptAuth('api_token')      // user JWTs get 401 here
-  @RequirePrivilege('workspace:write')
-  syncData(@Req() req: Request) {
-    const { tenantId } = req.bridgeApiToken!;
-    return this.syncService.run(tenantId);
-  }
-}
-```
-
-See **auth-prompt.md** for the full token-verification, privilege, and access-control story.
-
-## Feature flags
-
-Feature flags gate behavior behind a switch you control from the Bridge dashboard, no redeploy required. There are two ways to check flags — pick by whether you need live updates. `@RequireFlag` / `BridgeFlagsService` (from `@nebulr-group/bridge-nestjs/flags`) evaluate against a local client that can subscribe to live updates and can also read a flag value. `@RequireFeatureFlag` / `FeatureFlagService` (from the package root) evaluate on demand over the Bridge API with a short cache and no live updates — good for simple route gating without running a flags client. See **feature-flags-prompt.md** for setup and both paths in detail.
-
-## Billing and entitlements
-
-Read tenant data (subscription, branding) with `BridgeService.fromRequest(req)` (behind `BridgeAuthGuard`). A feature a plan sells is a flag ruled `bridge:billing.entitlement.<feature> eq true`, asked with `@RequireFeatureFlag` or a rule's `featureFlag`. Plan limits are one decorator on the handler — `@RequireQuota` / `@SyncQuota`. A backend plugin never runs checkout — purchasing lives in the frontend plugin. See **billing-prompt.md**.
-
-## Environment variables
-
-```env
-BRIDGE_APP_ID=your-app-id-here
-```
-
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `BRIDGE_APP_ID` | Yes | — | Your Bridge application ID |
-| `BRIDGE_API_BASE_URL` | For a stage, local or self-hosted app | `https://api.thebridge.dev` (production) | Bridge API base URL |
-| `BRIDGE_DEBUG` | No | `false` | Enable debug logging |
-
-## Verify the integration
-
-1. **Build check:** run the project's build command — no TypeScript or import errors.
-2. **Start check:** start the dev server — the app bootstraps cleanly.
-3. **Public endpoint:** `curl http://localhost:{port}/health` (or a `@Public()` route) returns 200.
-4. **Protected endpoint, no token:** `curl http://localhost:{port}/decks` returns 401.
-5. **Protected endpoint, valid token:** send a request with a valid `Authorization: Bearer <token>` header — returns 200 with data scoped to that user's tenant.
-6. **Gates:** `npx @nebulr-group/bridge-cli check gates` reports nothing — every gate is a flag.
+Run the terminal checks. If you have a browser tool, run the browser checks too. If you do not, list them for the developer, numbered, and start the summary with a Heads up line saying which checks were not run. That line starts "Heads up: not verified in a browser".

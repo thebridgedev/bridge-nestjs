@@ -1,8 +1,6 @@
-# Bridge NestJS — Feature Flags
+# Bridge NestJS 1.0 — Feature flags
 
-You are adding **Feature Flags** to a NestJS application that uses The Bridge. The goal is to ship code behind a switch you control from outside the app — no redeploy needed.
-
-On a backend there is no demo page to look at. The equivalent proof is a **guarded route whose HTTP status changes when you flip the flag**, so that is what this prompt builds.
+You are gating NestJS endpoints and behaviour with Bridge flags, using `@nebulr-group/bridge-nestjs` 1.0. The server is where a gate is enforced: anyone can call the API directly, so the flag check lives on the handler. The frontend asks the same flags to show or hide the matching UI.
 
 ## The one rule for app code
 
@@ -10,361 +8,126 @@ On a backend there is no demo page to look at. The equivalent proof is a **guard
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
-Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+Before calling the work done, run `npx @nebulr-group/bridge-cli@alpha check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
 
-In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+In NestJS, an endpoint is `@RequireFlag('…')` on the handler (or a route rule with `featureFlag`).
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+## Decide first — which surface?
 
-## Decide first — which surface do you need?
-
-Two unrelated decisions live in this prompt. Don't mix them up.
-
-**A. Consuming a flag in application code** — the NestJS SDK surface:
-
-| Goal | Use |
+| You are gating | Use |
 |---|---|
-| Block a route unless a flag is on | `@RequireFlag('key')` on the method **plus** `@UseGuards(BridgeFlagGuard)` — the decorator is inert without the guard |
-| Read a flag's value into a handler argument | `@Flag({ key, defaultValue })` param decorator (**one object argument**, not positional) |
-| Branch on a flag inside a service or worker | `BridgeFlagsService.flag(key, defaultValue, context?)` — synchronous, never throws |
+| A whole endpoint | `@RequireFlag('key')` on the handler or controller, or a rule's `featureFlag` |
+| Several flags | `@RequireFlag({ any: ['a', 'b'] })` or `{ all: [...] }` |
+| A value inside the handler (a page size, a variant) | `@Flag('key', fallback)` as a parameter |
+| Several values, or a reason | `@Flags()` (a `FlagSet`) or `BridgeService.flags(request)` |
+| Code with no request (a job, startup) | `BridgeService.visitorFlags(hints)`: public flags only |
 
-All three read the same in-memory cache, so the `hydrate()` call in Step 1 is a hard prerequisite for every one of them. Full signatures in **The gating surface** below.
+All of them need the module (`BridgeModule.forRoot(...)`, see the integration guide) and the guard on the route: the guard reads the caller's results once per request and the decorators use them.
 
-**B. Configuring the flag on the platform** — creating it, setting its state, writing its rule. That is not code; it happens over MCP tools or the `bridge` CLI, with the dashboard only as a fallback. See **Step 3 → Where to configure it**.
-
-## Prerequisites check
-
-Before starting, verify:
-
-1. `@nebulr-group/bridge-nestjs` is in `package.json` dependencies
-2. You have your **Bridge app id** (`get_app` over MCP, `bridge app get` on the CLI, or the dashboard) available as an env var — this prompt calls it `BRIDGE_APP_ID`
-3. You know your API base URL (`https://api.thebridge.dev` in prod; your local bridge-api otherwise) — this prompt calls it `BRIDGE_API_BASE_URL`
-4. A root `AppModule` exists at `src/app.module.ts`
-
-You do **not** need `BridgeModule.forRoot(...)` or Bridge Auth for flags. The flags entry point is deliberately auth-free — it pulls in no `BridgeAuthGuard`, no JWKS, no Bridge HTTP client.
-
-If the package isn't installed or you can't find an app id, run `bridge guide nestjs` first.
-
-> **Import path.** Import flags from `@nebulr-group/bridge-nestjs/flags` (requires >= 0.6.0). Earlier versions shipped no `exports` map, so that specifier threw `MODULE_NOT_FOUND` and this guide told you to reach into `@nebulr-group/bridge-nestjs/dist/flags` instead. Do not use that path in new code — it hard-codes the build layout into your imports and is deprecated (TBP-613).
-
-## Step 1 — Activate the flags layer
-
-Register `BridgeFlagsModule` once in the root `AppModule`. It is `@Global()`, so `BridgeFlagsService` injects anywhere afterwards.
-
-Two things are needed, and **the second is not optional**: the module constructs an *empty* flag cache. Nothing in the SDK bulk-loads it. Until you hydrate, every read returns your default.
+## Gate an endpoint
 
 ```ts
-// src/app.module.ts
-import { Module, type OnModuleInit } from '@nestjs/common';
-import { APP_INTERCEPTOR } from '@nestjs/core';
-import {
-  BridgeFlagsModule,
-  BridgeFlagsService,
-  BridgeContextInterceptor,
-  type CachedFlag,
-} from '@nebulr-group/bridge-nestjs/flags';
+import { Controller, Get, Post } from '@nestjs/common';
+import { Flag, RequireFlag } from '@nebulr-group/bridge-nestjs';
 
-@Module({
-  imports: [
-    BridgeFlagsModule.forRoot({
-      apiBaseUrl: process.env.BRIDGE_API_BASE_URL!,
-      apiKey: process.env.BRIDGE_APP_ID!,
-    }),
-  ],
-  providers: [{ provide: APP_INTERCEPTOR, useClass: BridgeContextInterceptor }],
-})
-export class AppModule implements OnModuleInit {
-  constructor(private readonly flags: BridgeFlagsService) {}
+@Controller('reports')
+export class ReportsController {
+  @RequireFlag('reports')
+  @Get()
+  list(@Flag('reports-page-size', 20) pageSize: number) { … }
 
-  // Load the rule set once at boot. Without this the in-memory cache is empty
-  // and every flag read returns its default until a live update happens to
-  // arrive over the websocket.
-  async onModuleInit(): Promise<void> {
-    const base = process.env.BRIDGE_API_BASE_URL!.replace(/\/+$/, '');
-    const appId = encodeURIComponent(process.env.BRIDGE_APP_ID!);
-    try {
-      const res = await fetch(`${base}/admin/flags-internal/flags-cache/${appId}`);
-      if (res.ok) this.flags.hydrate((await res.json()) as CachedFlag[]);
-    } catch {
-      // Best-effort: a failed hydrate must never block boot. Reads fall back
-      // to their defaults.
-    }
-  }
+  @RequireFlag({ all: ['reports', 'reports-export'] })
+  @Post('export')
+  export() { … }
 }
 ```
 
-`forRootAsync({ imports, inject, useFactory })` is available when the config comes from `ConfigModule`.
+`@RequireFeatureFlag` is the same decorator under its 0.x name. A rule does the same without a decorator: `{ path: '/reports/**', privilege: 'AUTHENTICATED', featureFlag: 'reports' }`.
 
-`apiKey` is sent as the `x-api-key` header to the realtime and telemetry endpoints, and is the same value every other Bridge SDK passes there: your **app id**.
+### The refusals
 
-## Step 2 — Your first flag: a route that flips
+| Status | `code` | When |
+|---|---|---|
+| `402` | `FEATURE_NOT_IN_PLAN` | A plan feature (or a used-up limit) keeps the flag off: an upgrade would turn it on. `feature` names it, `fix` is the module's `manageRoute` (default `/subscription`). The body is also an RFC 9457 problem (`urn:bridge:problem:entitlement-missing` or `urn:bridge:problem:limit-reached`). |
+| `403` | `FEATURE_OFF` | Any other reason the flag is off for this caller. |
 
-Create a controller gated on a flag. `@RequireFlag` is inert on its own — the metadata only takes effect when `BridgeFlagGuard` runs, so apply both.
+The frontend plugin's `bridgeFetch` opens the upgrade dialog on the `402`; nothing to add on the server.
+
+## Read values and reasons
 
 ```ts
-// src/flags-demo/flags-demo.controller.ts
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { RequireFlag, BridgeFlagGuard, Flag } from '@nebulr-group/bridge-nestjs/flags';
+import { Flags, type FlagSet } from '@nebulr-group/bridge-nestjs';
 
-@Controller('flags-demo')
-@UseGuards(BridgeFlagGuard)
-export class FlagsDemoController {
-  // 403 while `demo-flag` is off; 200 once it is on.
-  @Get('gated')
-  @RequireFlag('demo-flag')
-  gated() {
-    return { gated: true };
-  }
-
-  // Always 200 — reports the current value instead of gating on it.
-  @Get('value')
-  value(@Flag({ key: 'demo-flag', defaultValue: false }) demo: boolean) {
-    return { 'demo-flag': demo };
-  }
+@Get('home')
+home(@Flags() flags: FlagSet) {
+  const hero = flags.get('home-hero', 'classic');     // the value, or the fallback
+  const beta = flags.enabled('beta');                 // off unless Bridge said on
+  const why = flags.reason('beta');                   // { reason, why, entitlement }
 }
 ```
 
-Register `FlagsDemoController` in `AppModule`'s `controllers`, start the app, and prove it:
+`BridgeService.enabled(request, key)` and `BridgeService.flags(request)` do the same outside a decorator. A value whose type does not match the fallback gives the fallback.
+
+## Configure the flag and its rule
+
+The flag's rule is where "why" lives. Over MCP: `create_feature_flag`, `update_feature_flag`, `toggle_feature_flag`, `evaluate_feature_flag`. From a terminal (CLI 1.0):
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/flags-demo/gated   # → 403
-curl -s localhost:3000/flags-demo/value                                    # → {"demo-flag":false}
+bridge flag create reports --when "privileges contains reports:read"
+bridge flag create analytics --when "bridge:billing.entitlement.analytics eq true"
+bridge flag create new-editor --when "privileges contains notes:write" --rollout 25
+bridge flag create reports-page-size --type number --on-value 50 --off-value 20
+bridge flag on reports
+bridge flag off reports
+bridge flag get reports
+bridge flag eval reports --context '{"privileges":["reports:read"]}'
 ```
 
-The flag is auto-created in Bridge as **off** the first time it is evaluated — discovery telemetry is emitted on first sight of an unknown key.
+Who should get a feature (everyone, a share, a plan, named workspaces) is the developer's decision: ask before writing the rule. Rules read the caller as Bridge knows them (`privileges`, `user.*`, `tenant.*`) and the workspace's billing (`bridge:billing.entitlement.<feature>`, `bridge:billing.quota.<metric>.limit`, `.used`, `.remaining`). Never send a fact the caller supplied as if it were true.
 
-**After creating the files, tell the user:**
+## How the server stays current
 
-> I've added a flag-gated endpoint at `GET /flags-demo/gated`. It returns **403** right now. Flip **demo-flag** on and the same request starts returning **200**, with no redeploy — I can do that for you over MCP (`toggle_feature_flag`) or the CLI (`bridge flag toggle`), or you can toggle it yourself under **Feature Control** in the dashboard. `GET /flags-demo/value` shows the raw value.
+There is nothing to keep current. For each request the guard asks Bridge for the caller's results, once, and the decorators share that answer. A flag turned off, a rule changed or a plan upgraded in Bridge applies from the next request: no restart, no cache to clear, and no live connection to hold open. Bridge sends no webhook for flag changes, and the server needs none.
 
-## The gating surface
+- **Signed-in callers and keys:** asked per request, never cached across requests.
+- **Visitors** (a `@Public()` route with no credential, or `visitorFlags()`): only flags marked public give a result; an answer is kept 10 seconds per set of facts, so a busy public route does not ask Bridge each time.
+- **A long-running job:** ask again at each unit of work instead of keeping one `FlagSet` for the job's life.
+- **When Bridge cannot answer:** every flag gives its fallback, so a gate stays closed (`@RequireFlag` refuses) and `@Flag` returns the fallback you wrote.
 
-| Surface | Signature | Notes |
-|---|---|---|
-| `@RequireFlag` | `RequireFlag(key, defaultValue = false, options?)` | Method or class decorator. Needs `BridgeFlagGuard` to do anything |
-| `options.equals` | `unknown` | Compare a non-boolean flag against a specific value. Defaults to `true` |
-| `options.optional` | `boolean` | See caveat below |
-| `BridgeFlagGuard` | `@UseGuards(BridgeFlagGuard)` | Reads the metadata, evaluates, throws `ForbiddenException` on a miss |
-| `@Flag` | `@Flag({ key, defaultValue })` | Param decorator — **single object argument**, not positional |
-| `useFlagParam` | `useFlagParam<T>(key, defaultValue)` | Wraps `@Flag` so the generic survives: `const ShowNew = useFlagParam<boolean>('show-new', false)` |
-| `BridgeFlagsService.flag` | `flag<T>(key, defaultValue, context?): T` | Synchronous, never throws. `T` is inferred from the default |
+## Public flags
+
+A flag marked public (`bridge flag create <key> --public`, or `bridge flag update <key> --public`) is what Bridge shows anyone, signed in or not. On a `@Public()` route a flag that is not public is absent: `@RequireFlag` on it refuses `403 FEATURE_OFF` and `@Flag` gives its fallback. Nothing is sent with the question, so the app key never speaks for a stranger.
 
 ```ts
-// Gate on a specific value of a string flag:
-@Get('beta')
-@RequireFlag('export-mode', 'v1', { equals: 'v2' })
-betaExport() {}
+@Public()
+@Get('banner')
+banner(@Flag('signup-banner', false) show: boolean) { … }
 ```
 
-Pass logic in the guard: the value passes when it equals `options.equals`, or — for the default boolean case — when it is merely truthy.
+For code with no request: `this.bridge.visitorFlags({ country: 'SE' })` with facts your server knows.
 
-**Caveat on `options.optional`.** The source intends "skip the guard instead of rejecting", but the implementation returns `false` from `canActivate`, which Nest turns into a 403 with its generic message. Today it rejects either way; only the error body differs. Don't rely on it to let a request through.
+## Keys
 
-**Programmatic reads** — same evaluation, no decorator:
-
-```ts
-@Injectable()
-export class ReportsService {
-  constructor(private readonly flags: BridgeFlagsService) {}
-
-  generate(userId: string) {
-    // Synchronous: local eval against the in-memory cache. No await, no network.
-    if (this.flags.flag('use-new-pipeline', false, { identity: userId })) return this.v2();
-    return this.v1();
-  }
-}
-```
-
-The default is mandatory and it types the call: `flag('max-uploads', 10)` is a `number`, `flag('rate-limit', { window: 60 })` is that object shape. If the stored value's type doesn't match the default's, the default is returned.
-
-## Step 3 — Configure how the flag decides (states and rules)
-
-A flag has exactly **three states**. `off` and `on` apply to everyone; `on-with-rule` decides per identity.
-
-| State | Meaning |
-|---|---|
-| `off` | Everyone gets the off value. A newly auto-created flag starts here |
-| `on` | Everyone gets the on value |
-| `on-with-rule` | The rule decides. Whoever matches a branch gets that branch's value; everyone else gets `otherwiseValue` |
-
-A rule is **branches + otherwiseValue + rolloutPct**, first match wins:
-
-```jsonc
-{
-  "branches": [
-    { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise_export", "operator": "eq", "values": [true] } ],
-      "returnValue": true }
-  ],
-  "otherwiseValue": false,
-  "rolloutPct": 100          // 0-100, applies to the WHOLE rule
-}
-```
-
-- Conditions inside one branch are AND-ed; add more branches for OR / different return values.
-- Operators: `eq` `neq` `contains` `not_contains` `in` `not_in` `gt` `lt` `between` `regex` `exists` `not_exists` (numeric and date operators only apply to those attribute types).
-- `attribute` is a dotted path into the eval context (next step). With Bridge Auth, `user.id` `user.email` `tenant.id` `privileges` and `bridge:billing.entitlement.<feature>` are the ones gates are ruled on: a privilege for who someone is, a plan feature (listed on the plans that sell it with `bridge plan feature add <plan> <feature>`) for what their plan buys. Never rule on a plan's name.
-- **`rolloutPct` below 100 requires an identity** on the eval context — bucketing is `hash(flagKey + identity) mod 100`. With no identity the SDK refuses to bucket and returns the safe value rather than randomizing per call.
-
-### Where to configure it — MCP, CLI, or dashboard
-
-Bridge exposes flag configuration over **two channels an agent can drive**, and they hit the same management API, so the result is identical:
-
-| | Channel | Surface |
-|---|---|---|
-| **MCP** | Bridge MCP server | `list_feature_flags`, `get_flag`, `create_feature_flag`, `update_feature_flag`, `toggle_feature_flag` — plus evaluate / delete / schedule / export / import, below |
-| **CLI** | `bridge` | `bridge flag list \| get \| create \| update \| toggle \| eval` |
-
-**Use whichever you actually have.** If the user asked for a specific one, use that one — no reason to argue, both reach the same API. If you have both and the user expressed no preference, either is correct; pick one and stay on it for the whole task so you aren't reasoning about two views of the same state.
-
-The **dashboard (Feature Control) is a last resort**, not a third equal option. Only walk the user through the UI when neither MCP nor CLI is available *and* they don't want to install one.
-
-Creating the flag from the rule above, in either channel:
-
-```jsonc
-// MCP — create_feature_flag
-{
-  "key": "enterprise-export",
-  "valueType": "boolean",
-  "state": "on-with-rule",
-  "rule": {
-    "branches": [
-      { "conditions": [ { "attribute": "bridge:billing.entitlement.enterprise_export", "operator": "eq", "values": [true] } ],
-        "returnValue": true }
-    ],
-    "otherwiseValue": false,
-    "rolloutPct": 100
-  }
-}
-```
-
-```bash
-# CLI — same flag
-bridge flag create --key enterprise-export --value-type boolean --state on-with-rule \
-  --rule '{"branches":[{"conditions":[{"attribute":"bridge:billing.entitlement.enterprise_export","operator":"eq","values":[true]}],"returnValue":true}],"otherwiseValue":false,"rolloutPct":100}'
-```
-
-**Flipping a flag on or off**, without touching its rule — the channels differ here, and it costs you a round-trip:
-
-| Channel | Call | Lookup needed |
-|---|---|---|
-| MCP | `toggle_feature_flag` with `{ key, enabled }` | **None** — it resolves the key to an id itself. One call |
-| CLI | `bridge flag toggle --id <id> --enabled true` | Yes — `bridge flag toggle` and `bridge flag update` both key off the flag's **id**, not its key. Run `bridge flag list` first |
-
-```bash
-bridge flag update --id <id> --state on      # or --state off | on-with-rule
-```
-
-For anything beyond plain on/off — rewriting the rule, changing values or `valueType` — use `update_feature_flag` / `bridge flag update`. Note that the MCP `update_feature_flag` also takes an `id` (from `list_feature_flags`); only `toggle_feature_flag` accepts the key.
-
-Inspect current state with `list_feature_flags` (MCP) or `bridge flag list` / `bridge flag get <key>` (CLI).
-
-**The rest of the surface — both channels have it.** Neither is a subset of the other; don't send the user to the CLI or the dashboard for any of these:
-
-| Operation | MCP tool | CLI |
-|---|---|---|
-| Dry-run a rule against a synthetic context | `evaluate_feature_flag` | `bridge flag eval` |
-| Delete a flag (irreversible, needs confirmation) | `delete_feature_flag` | `bridge flag delete` |
-| Schedule a future state transition | `set_flag_schedule` | `bridge flag schedule set` |
-| Cancel a scheduled transition | `clear_flag_schedule` | `bridge flag schedule clear` |
-| Bulk export / import | `export_feature_flags`, `import_feature_flags` | `bridge flag export`, `bridge flag import` |
-
-```bash
-bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=true   # → true
-bridge flag eval enterprise-export --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=false  # → false
-```
-
-`evaluate_feature_flag` takes `key`, `identity` and `attributes` and runs the live config through the same evaluator the server and the SDKs use, so its verdict is what the app would see. Writing nothing, it is the cheap way to check targeting before you ship code that depends on it. A rule with `rolloutPct < 100` needs an `identity` to bucket on.
-
-## Step 4 — Feed the rule its inputs (eval context)
-
-Rules can only target what the process sends. This is the crux on a backend: a server is not "a user", so **the SDK never invents an identity** — you supply one per request or per call.
-
-```ts
-{
-  identity?: string;                    // stable per-user id — required when rolloutPct < 100
-  attributes: Record<string, unknown>;  // dotted or nested; whatever your rules target
-}
-```
-
-There are exactly three sources, lowest precedence first:
-
-**1. Module-global context** — set once, applies to every eval in the process. Right for system-level attributes (region, deployment, version):
-
-```ts
-BridgeFlagsModule.forRoot({
-  apiBaseUrl, apiKey,
-  initialContext: { attributes: { region: process.env.AWS_REGION ?? 'local' } },
-  serverInstanceId: serverInstanceId(),   // exported from the flags barrel
-});
-// …or later: this.flags.setContext({ attributes: { region } }, /* merge */ true);
-```
-
-**2. Per-request context, via `BridgeContextInterceptor`** — this is the mechanism for user-scoped evals. Registered as an `APP_INTERCEPTOR` in Step 1, it runs on every request and:
-
-- takes `identity` from the **verified** caller only: `req.bridgeUser.id` (set by `BridgeAuthGuard`), then `req.user.id` (your own server-side auth);
-- fills the targeting attributes from verified sources only (TBP-757): `user.id` `user.role` `user.email` `tenant.id` `tenant.plan` `privileges` from the token `BridgeAuthGuard` verified, plus the workspace's `bridge:billing.plan` `bridge:billing.subscription.status` `bridge:billing.trial` `bridge:billing.entitlement.<feature>` from Bridge when `BridgeModule` is loaded (cached per workspace, refreshed on a newer token or after 30 s; `bridge:billing.quota.*` is browser-only for now);
-- stores the result at `req.bridgeFlagsContext` (`undefined` when there is no verified user → anonymous evaluation), and puts the raw `BridgeFlags` instance at `req.bridgeFlags` so `@Flag(...)` can reach it.
-
-`BridgeFlagGuard` and `@Flag` build the same verified context themselves, so a signed-in user buckets identically in the browser and on the server, and a rule on a privilege, role, plan or plan feature gives the same answer on both. Outside a request pipeline, `await resolvedFlagContext(req, bridgeService)` (flags barrel) builds it.
-
-**The `x-bridge-context` header is internal and never trusted from clients.** The SDK does not read it (TBP-671): any client can send one, and trusting it let a request evaluate as another user on another plan. Do not deserialize it yourself, and do not forward it from a proxy.
-
-**3. Per-call context** — highest precedence, wins on key collision:
-
-```ts
-this.flags.flag('feature-x', false, { identity: req.bridgeUser.id });        // on behalf of a user
-this.flags.flag('new-pipeline', false, { identity: tenantId });               // sticky per tenant
-this.flags.flag('worker-v2', false, { attributes: { queue: 'billing' } });    // system-level
-```
-
-**Security rule:** never evaluate with client-sent identity or attributes — **never trust a client-sent `user.role` / `tenant.plan`.** The SDK already fills those from the verified token and from Bridge; do not add an `AuthAttributeProvider` or copy them into per-call `attributes` (per-call keys win on collision, so a client value there would override the verified one). When writing a rule on who someone is, prefer `privileges contains "<PRIVILEGE>"` over `user.role eq "<ROLE>"`; for a feature a plan sells, target `bridge:billing.entitlement.<feature>`.
-
-## How server-side evaluation actually works
-
-This is the part that differs most from the browser SDKs, and it is the point of using flags on NestJS at all.
-
-- **Evaluation is local and synchronous.** `BridgeFlagsModule.forRoot` builds one `BridgeFlags` instance holding a `Map` of `{ key, state, valueType, offValue, onValue, rule }`. `flag()` looks up the key, merges context, and runs the rule evaluator in-process. No HTTP on the read path, no `await`, safe in a hot request handler. Evaluation logic is the *same* module bridge-api uses server-side, so a CLI `flag eval` and a live request agree.
-- **Backend mode is the default** (`mode: 'backend'`). Its one behavioural difference: when a flag is `on-with-rule` and the eval context has **no identity**, the SDK returns your default and warns once per key, instead of bucketing an anonymous user.
-- **The cache is filled by you, then kept fresh by push.** The module does **not** fetch flags on boot — hence the `hydrate()` call in Step 1. After that, in the default `runtimeMode: 'channel'`, a `RealtimeClient` opens a websocket and applies `flag.updated` / `flag.removed` messages to the cache as admins change things. That is your live-update path, and it is incremental only: it never re-sends the full set.
-- **Unknown key → default + discovery.** A key not in the cache returns your default and fires a one-shot discovery event so Bridge creates the flag record (as `off`).
-- **Telemetry is batched** to `/v1/flags/eval-events`, `/v1/flags/discover`, `/v1/flags/call-sites`. Disable it with `telemetry: { enabled: false }` in tests or offline.
-- **Teardown** happens on `onModuleDestroy` — the service stops realtime and telemetry.
-
-### `runtimeMode: 'pull'` — read this before using it
-
-```ts
-BridgeFlagsModule.forRoot({ apiBaseUrl, apiKey, runtimeMode: 'pull', pullCache: { ttlMs: 30_000 } });
-```
-
-`'pull'` is meant for ephemeral runtimes (cron, serverless, webhook handlers, CLI scripts). It forces `realtime.enabled: false`, so **no websocket and therefore no live updates at all**, and registers a `BridgePullCache` under the `BRIDGE_PULL_CACHE` token.
-
-**What is not supported today:** that pull cache is *not wired into flag reads*. It is a generic TTL cache exposed as an injectable; nothing in this SDK re-fetches the flag set through it. In pull mode the cache you hydrated at boot is the cache you keep for the process's lifetime. If a pull-mode process is long-lived, re-run the `flags-cache` fetch + `hydrate()` yourself on whatever cadence you need.
-
-Also not supported: there is no `refresh()` on `BridgeFlagsService`, and no automatic re-hydrate after a websocket reconnect — a flag changed while the socket was down stays stale until the next `hydrate()`.
+A key passes a flag gate when the flag's rule matches the key's privileges; otherwise `403 FEATURE_OFF`. A key on a route with no gate at all is refused `403 KEY_ROUTE_NOT_OPEN` (see the auth guide).
 
 ## Troubleshooting
 
-- **`Cannot find module '@nebulr-group/bridge-nestjs/flags'`** — you are on bridge-nestjs < 0.6.0, which shipped no `exports` map. Upgrade. Do not work around it with `/dist/flags`; that path is deprecated (TBP-613).
-- **Every flag returns its default, forever.** You didn't hydrate. Confirm the `flags-cache` fetch in `onModuleInit` returns a non-empty array, and that `apiBaseUrl` / `apiKey` (app id) are the ones for the workspace holding the flag.
-- **`@RequireFlag` has no effect.** The decorator is only metadata. Add `@UseGuards(BridgeFlagGuard)` to the controller (or register it globally).
-- **`@Flag(...)` always returns the default.** It reads `req.bridgeFlags`, which is set by `BridgeContextInterceptor` or by `BridgeFlagGuard`. On a route with neither, there is nothing to read. Register the interceptor globally.
-- **`@Flag('key', false)` doesn't compile / misbehaves.** It takes one object: `@Flag({ key, defaultValue })`.
-- **Rule never matches?** Run `bridge flag eval <key> --identity … --attribute k=v` to see the verdict with the app out of the way, then confirm the request actually carries those attributes — log `req.bridgeFlagsContext` in the handler. Over MCP there is no `eval` tool: read the rule back with `list_feature_flags` to confirm it stored what you meant, then compare it against the logged context.
-- **`rolloutPct < 100` and the value never flips on.** No identity on the eval context. Backend mode refuses to bucket; look for the `[bridge.flag] '<key>': backend eval requires an explicit identity` warning.
-- **A toggle (from any channel) doesn't reach the service.** Channel mode needs an outbound WebSocket; a proxy that blocks it leaves you on the cache you hydrated. Restart, or re-hydrate. In `runtimeMode: 'pull'` this is expected — there is no socket.
-- **A `string`/`number` flag reads as its default.** Type mismatch between the stored value and the type your `defaultValue` implies — the SDK falls back to the default on purpose. Fix `--value-type` on the flag.
+- **Always `403 FEATURE_OFF`:** work out what the rule gives a caller with `bridge flag eval <key> --context '<the caller's facts as JSON>'`; read the rule with `bridge flag rule show <key>`.
+- **`@Flag` always gives the fallback:** the route has no guard (no credential is read), the fallback's type differs from the flag's, or it is a `@Public()` route and the flag is not public.
+- **A route rule never matches:** write `path` as the route is declared, with the global prefix (`/api/reports/:id`), not as a concrete URL.
 
 ## Verify
 
-1. **Build.** `npm run build` — no TypeScript or import errors.
-2. **Hydrate.** Start the app; confirm the `flags-cache` fetch succeeded (log its length once if unsure). An empty cache invalidates every step below.
-3. **Flag off (default).** `curl -s -o /dev/null -w '%{http_code}\n' localhost:3000/flags-demo/gated` → **403**. `curl -s localhost:3000/flags-demo/value` → `{"demo-flag":false}`.
-4. **Confirm it registered.** `list_feature_flags` (MCP) or `bridge flag list` (CLI) shows `demo-flag`, state `off` — it was auto-created by that first eval.
-5. **Flip it on.** `toggle_feature_flag { key: 'demo-flag', enabled: true }` (MCP), or `bridge flag toggle --id <id> --enabled true` / `bridge flag update --id <id> --state on` with the id from step 4 (CLI). Dashboard only if you have neither.
-6. **Observe the change.** Re-run the same two curls: **200**, and `{"demo-flag":true}` — with no redeploy and no restart, because the change arrived over the channel.
-7. **Flip it back off** and confirm both revert.
-8. **Targeting (if you wrote a rule).** Dry-run it: `evaluate_feature_flag { key, identity: 'user-123', attributes: { 'bridge:billing.entitlement.enterprise_export': true } }` over MCP, or `bridge flag eval <key> --identity user-123 --attribute bridge:billing.entitlement.enterprise_export=true` on the CLI. Either way, finish by issuing the request with that user's access token (`Authorization: Bearer …`) and confirming the endpoint agrees. An `x-bridge-context` header must make no difference.
+### Terminal checks
 
----
+1. `npm run build` passes.
+2. `bridge flag get <key>` shows the rule the developer asked for.
+3. With the flag off (`bridge flag off <key>`), the gated endpoint called with a signed-in person's token answers `403 FEATURE_OFF` (or `402 FEATURE_NOT_IN_PLAN` when a plan feature keeps it off). With it on, it answers `2xx`. Called with no token, it answers `401`.
+4. `npx @nebulr-group/bridge-cli@alpha check gates` lists nothing.
 
-For anything this prompt doesn't cover — the older auth-coupled `@RequireFeatureFlag` / `FeatureFlagService` surface (root package, rides `BridgeAuthGuard`, evaluates over the Bridge API with a 5-minute per-token cache, booleans only), and its `{ any: [...] }` / `{ all: [...] }` forms — read `learning/feature-flags/feature-flags.md` rather than guessing an API.
+### Browser checks
+
+1. In the frontend, the UI the flag gates shows when the flag is on and hides when it is off, without a reload.
+2. A person the rule does not match does not see it, and calling the endpoint from the frontend is refused.
+
+Run the terminal checks. If you have a browser tool, run the browser checks too. If you do not, list them for the developer, numbered, and start the summary with a Heads up line saying which checks were not run. That line starts "Heads up: not verified in a browser".

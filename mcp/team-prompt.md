@@ -1,4 +1,6 @@
-# Bridge NestJS — Team & Workspace
+# Bridge NestJS 1.0 — Team, workspaces and webhooks
+
+How a NestJS API on `@nebulr-group/bridge-nestjs` 1.0 works with workspaces and their members: the caller's workspace on each request, the management client for members and invites, and Bridge's webhooks for plan and team changes.
 
 ## The one rule for app code
 
@@ -6,100 +8,138 @@
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
-Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+Before calling the work done, run `npx @nebulr-group/bridge-cli@alpha check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
 
-In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+In NestJS, an endpoint is `@RequireFlag('…')` on the handler (or a route rule with `featureFlag`).
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+## Decide first — where does it belong?
 
-## There is no team-management API here
-
-**Read this first: there is no team-management API in this plugin, and that is deliberate.**
-
-If you came here looking for `listMembers()`, `inviteUser()`, `updateRole()` or a `TeamService`, stop looking. They do not exist in `@nebulr-group/bridge-nestjs`, they are not coming, and the time you spend grepping for them is wasted. This guide exists to say that in one place instead of letting you discover it by exhaustion.
-
-## Decide first — where does this belong?
-
-| What you want | Where it lives |
+| You want | Where |
 |---|---|
-| A UI to list, invite, remove or re-role members | The **frontend** Bridge plugin — `TeamManagementPanel` in svelte / react / nextjs |
-| Programmatic member CRUD from a script or backend job | The **Bridge management API**, via MCP tools or `bridge user …` / `bridge tenant …` on the CLI |
-| Know which workspace the current request belongs to | This plugin — `@CurrentTenant()` |
-| Decide who in that workspace may call a handler | This plugin — `@RequireFeatureFlag('…')`, the flag ruled on a privilege |
-| Store your own per-workspace data | Your database, keyed by the tenant id from `@CurrentTenant()` |
+| The team page: members, invites, roles | The frontend plugin (bridge-svelte 1.0: `TeamPanel`). It calls Bridge directly; the backend adds nothing. |
+| Scope your own data to the caller's workspace | `@CurrentActor('workspaceId')` on every handler |
+| Who may manage the team in your own endpoints | A flag: Bridge's own `bridge-team-manage`, or one of yours ruled on a privilege |
+| Members or invites from your server (provisioning, an import, an admin tool) | `BridgeManagementService` |
+| React when a workspace, member or subscription changes | A webhook receiver: `@BridgeWebhook()` |
+| Which roles exist and what each may do | App configuration, decided with the developer: over MCP `create_role`, `update_role`; from a terminal `bridge role create <key> --name <name> --privilege <privilege>` |
 
-The split is not arbitrary. Team membership is Bridge platform state, owned by bridge-api. A backend plugin that also mutated it would be a second writer to somebody else's data, with its own cache and its own idea of what a role means.
-
-## What this plugin does give you
-
-### The current workspace
+## The caller's workspace
 
 ```ts
-import { Controller, Get } from '@nestjs/common';
-import { CurrentTenant, CurrentUser, type BridgeTenant, type BridgeUser } from '@nebulr-group/bridge-nestjs';
+@Get('projects')
+list(@CurrentActor('workspaceId') workspaceId: string) {
+  return this.projects.findAll({ workspaceId });
+}
+```
 
-@Controller('cases')
-export class CaseController {
-  @Get()
-  async list(@CurrentTenant() tenant: BridgeTenant, @CurrentUser() user: BridgeUser) {
-    // tenant.id is the workspace this request belongs to. Scope EVERY query by
-    // it — this is the line that keeps one customer's data out of another's.
-    return this.cases.findAllByTenant(tenant.id);
+The workspace comes from the verified token. Never take it from the body, the query or a header the client sent. A person who belongs to several workspaces switches in the frontend; the next token names the new workspace.
+
+## Members and invites from the server
+
+`BridgeManagementService` calls Bridge's API. Call as the person who called your API when Bridge should apply their privileges:
+
+```ts
+import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { BridgeManagementService, RequireFlag } from '@nebulr-group/bridge-nestjs';
+
+@Controller('team')
+export class TeamController {
+  constructor(private readonly management: BridgeManagementService) {}
+
+  @RequireFlag('bridge-team-manage')
+  @Get('members')
+  members(@Req() request: { headers: unknown }) {
+    return this.management.forCaller(request).workspace.members.list();
+  }
+
+  @RequireFlag('bridge-team-manage')
+  @Post('invites')
+  invite(@Req() request: { headers: unknown }, @Body() body: { email: string; role?: string }) {
+    return this.management.forCaller(request).workspace.invites.send(body);
   }
 }
 ```
 
-Both come from the verified JWT. There is no extra network call, and no way for a caller to spoof them without a valid signature.
+With the app key, for work no person started (a provisioning job): `this.management.workspaces.create({ name })`, then `this.management.workspace(workspaceId)` with `members.list()`, `members.update(id, patch)`, `members.remove(id)`, `invites.list()`, `invites.send({ email, role })`, `invites.cancel(id)`. The app key needs the privileges those calls ask for; a refusal throws a `BridgeError` (`kind: 'forbidden'`, `status`, `code`).
 
-> **Scope by `tenant.id`, always.** A missing tenant filter is the single most damaging bug available in a multi-tenant backend, and it is invisible in testing with one workspace. If a query cannot be scoped, be able to say why.
+A workspace's own key (for its CI or integrations): `this.management.forCaller(request).workspaceKeys.create({ name, privileges })`, shown once.
 
-### Deciding who may call a handler
+Which role an invitee gets is the developer's decision: ask, never pick one.
+
+## Webhooks
+
+Bridge sends the app's server a signed POST for workspace, member and billing changes. Set the receiver's address and read the signing secret on the Bridge dashboard's Webhooks page for the app (the address must be public https). Put the secret in `BRIDGE_WEBHOOK_SECRETS`.
 
 ```ts
-import { Controller, Delete, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
+// main.ts: signatures are checked over the body exactly as it arrived
+const app = await NestFactory.create(AppModule, { rawBody: true });
+```
 
-@Controller('workspace')
-@UseGuards(BridgeAuthGuard)
-export class WorkspaceController {
-  @Delete('members/:id')
-  @RequireFeatureFlag('remove-members')   // rule: privileges contains "users:write"
-  async removeMember() {
-    // Your own logic. Removing the member from BRIDGE is a management-API
-    // call, not something this plugin can do.
+```ts
+import { Controller, HttpCode, Post } from '@nestjs/common';
+import { BridgeWebhook, WebhookEvent, type BridgeWebhookEvent } from '@nebulr-group/bridge-nestjs';
+
+interface Delivery {
+  id: string;
+  type: string;
+  created: number;
+  app_id: string;
+  workspace_id?: string;
+  data: Record<string, unknown>;
+}
+
+@Controller('webhooks')
+export class WebhooksController {
+  @BridgeWebhook()
+  @HttpCode(204)
+  @Post('bridge')
+  async receive(@WebhookEvent() event: BridgeWebhookEvent<Delivery>) {
+    if (await this.seen.has(event.id)) return;        // the same id across retries and replays
+    switch (event.type) {
+      case 'subscription.plan_changed':               // data: { workspaceId, fromPlan, toPlan }
+      case 'tenant_user.created':                     // data: the member (id, email, role, …)
+      case 'tenant_user.deleted':                     // data: { id }
+        await this.sync.apply(event.type, event.payload.data);
+    }
+    await this.seen.add(event.id);
   }
 }
 ```
 
-The flag's rule says who: a privilege the right roles hold (`privileges contains "users:write"`), so a role rename or a new custom role changes nothing in code. `@RequirePrivilege()` is different — it scopes API tokens only (machine callers), not people.
+`@BridgeWebhook()` makes the route public and checks `Bridge-Signature` (`t=<seconds>,v1=<HMAC-SHA256>`) against your secrets; a delivery older than 5 minutes or signed with another secret is refused `401`. When you rotate the secret, Bridge signs with both for 24 hours: set `BRIDGE_WEBHOOK_SECRETS=new,old`, then drop the old one. Outside NestJS, `verifyWebhook({ body, headers, secrets })` does the same.
 
-## Managing members for real
+Answer quickly with a `2xx`; Bridge retries a failed delivery for about four days, with the same event id. Handle each id once.
 
-Over MCP:
+The event types Bridge sends:
 
-| Task | Tool |
+| Area | Types |
 |---|---|
-| List workspaces | `list_tenants` |
-| Create a workspace | `create_tenant` |
-| Add a user to a workspace | `create_tenant_user` |
-| Change a member's role | `update_tenant_user` |
-| Remove a member | `delete_tenant_user` — destructive, needs confirmation |
+| Workspaces | `tenant.created`, `tenant.updated`, `tenant.deleted` |
+| Members | `tenant_user.created` (joined: invite accepted or sign-up), `tenant_user.updated` (role or profile), `tenant_user.deleted` (left or removed) |
+| Subscriptions | `subscription.created`, `subscription.plan_changed`, `subscription.trial_started`, `subscription.trial_will_end`, `subscription.trial_ended`, `subscription.past_due`, `subscription.reactivated`, `subscription.canceled` |
+| Payments and limits | `payment.succeeded`, `payment.failed`, `quota.exhausted`, `entitlements.changed`, `usage.drift_resolved`, `usage.drift_unrecoverable` |
 
-On the CLI: `bridge tenant list`, `bridge tenant create`, `bridge user invite`, `bridge user update`, `bridge user delete`.
-
-Both channels are equivalent. Use whichever the caller has; do not send someone to the dashboard just because you happen to have one of them.
-
-> Destructive operations (anything that deletes) require a token carrying the matching privilege. A default `bridge auth login` token deliberately has none — `bridge auth login --admin` requests them. Over MCP the token needs the destructive privilege enabled explicitly, and the tool will ask for confirmation.
+Flag changes are not webhooks: the server reads a caller's flags from Bridge on each request, so a change applies from the next one (feature-flags guide).
 
 ## Common mistakes
 
-- **Building a `/team/members` proxy endpoint in your API** that forwards to Bridge. The frontend plugin already talks to Bridge directly with the user's token. A proxy adds a hop, a second place for the role logic to drift, and a new way to leak another workspace's members.
-- **Caching membership in your own database.** It goes stale the moment someone is removed, and the stale copy is the one your authorization check reads.
-- **Trusting a `tenantId` from the request body or a query parameter.** Use `@CurrentTenant()`. A body field is caller-controlled; the JWT claim is not.
-- **Assuming `OWNER` implies every privilege.** Rule the flag on the privilege you actually need, after reading the app's real roles (`list_roles` / `bridge role list`).
+- Reading a role or privilege in a handler to decide who may manage the team: gate with a flag instead.
+- Taking the workspace id from the request body.
+- Parsing the webhook body before the check (`rawBody: true` is required) or handling a retried id twice.
+- Building a team page on the backend when the frontend plugin's `TeamPanel` already does it.
 
-## Related guides
+## Verify
 
-- `integration-prompt.md` — wiring `BridgeModule` in, if you have not yet
-- `auth-prompt.md` — token verification, `@RequirePrivilege`, API-token vs user-token
-- The frontend plugin's `team-prompt.md` — where the UI actually goes
+### Terminal checks
+
+1. `npm run build` passes.
+2. A POST to the webhook route with no or a wrong `Bridge-Signature` answers `401`.
+3. `curl -i -H "Authorization: Bearer <token>" http://localhost:3000/team/members` for a person the flag lets through answers the member list; for one it does not, `403 FEATURE_OFF`.
+4. `npx @nebulr-group/bridge-cli@alpha check gates` lists nothing.
+
+### Browser checks
+
+1. Invite a teammate from the frontend's team page, accept the invite in another browser: the receiver logs `tenant_user.created`.
+2. Change the workspace's plan in the frontend's plan page: the receiver logs `subscription.plan_changed`.
+
+Run the terminal checks. If you have a browser tool, run the browser checks too. If you do not, list them for the developer, numbered, and start the summary with a Heads up line saying which checks were not run. That line starts "Heads up: not verified in a browser".

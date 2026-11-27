@@ -2,7 +2,7 @@
 
 A plan limit is one decorator on the handler that creates the thing. It holds one unit of the limit before the handler runs and counts it after the handler succeeds, so a POST increments the limit and there is nothing else to wire: no usage call after the insert, no counter table, no quota endpoint for the frontend.
 
-The limit lives on your backend because anyone can call your API directly. The frontend only shows the decision: Bridge's frontend plugins open an upgrade dialog on the `402` this page describes, with no page code. The server is authoritative; the client is decorative.
+The limit lives on your backend because anyone can call your API directly. The frontend only shows the decision: Bridge's frontend plugins open an upgrade dialog on the `402` this page describes, with no page code. The server enforces; the browser shows or hides.
 
 ## The one rule for app code
 
@@ -23,7 +23,8 @@ In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a rout
 | Examples | exports, API calls, AI completions | tickets, projects, stored files, seats |
 | Who counts | Bridge, one event per successful request | Your app, from its own data |
 | Resets | each billing period | never |
-| Quota | `bridge plan quota set <plan> --metric exports --limit 100 --policy hard` | the same with `--kind gauge` |
+| Metric | `bridge metric set exports --kind counter` | `bridge metric set tickets --kind gauge` |
+| Limit | `bridge plan limit set <plan> exports=100` | `bridge plan limit set <plan> tickets=5` |
 | Decorator | `@RequireQuota('exports')` | `@RequireQuota('tickets', { current })` on create, `@SyncQuota('tickets', { current })` on delete |
 
 ```ts
@@ -64,7 +65,7 @@ export class TicketsController {
 
 `current` receives a `QuotaTenant` (`t.id` is the verified workspace id, `t.userId` the person, `t.actor` the verified caller) and the controller instance, so it can use the controller's services. After a 2xx the gauge is set to your count, so Bridge's copy heals itself if it ever missed an update. There is no decrement: every create and delete sends the whole count.
 
-**Seats** are a plan limit the app names, e.g. `seats`, set as a gauge counted from membership (`--kind gauge --source membership`). Bridge counts the workspace's active members, pending invites included, so the app does not pass `current` for it.
+**Seats** are a built-in metric, `seats`, counted from membership: set its limit with `bridge plan limit set <plan> seats=5`. Bridge counts the workspace's active members, pending invites included, so the app does not pass `current` for it.
 
 ## What happens on a request
 

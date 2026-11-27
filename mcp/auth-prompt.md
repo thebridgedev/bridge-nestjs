@@ -1,8 +1,6 @@
-# Bridge NestJS — Authentication & Access Control
+# Bridge NestJS 1.0 — Authentication & access
 
-You are wiring **backend authentication and access control** into a NestJS application that uses The Bridge. This is the server-side analog of the frontend "SDK auth" guide: there is no login screen and no token issuance here. The frontend obtains the user's access token; this plugin **verifies** that token on every request, attaches the verified identity to the request, and gates handlers by flag, API-token scope and auth type.
-
-All JWT and API-token verification is delegated to `@nebulr-group/bridge-auth-core/backend` (`JwksService`). The plugin does no local `jose` verification — it fetches the JWKS, verifies the signature (PS256), checks issuer/audience, and transforms the claims into `BridgeUser` / `ApiTokenClaims`.
+How `@nebulr-group/bridge-nestjs` 1.0 decides who may call a route: the guard checks the credential, a flag decides who gets the route, and app code decides about one specific record. Read the integration guide first if the module is not registered yet.
 
 ## The one rule for app code
 
@@ -10,291 +8,148 @@ All JWT and API-token verification is delegated to `@nebulr-group/bridge-auth-co
 
 Two things are not gates and are not flags: **numbers** are plan limits (`<QuotaGate>` in the browser, `@RequireQuota` on the backend), and **permission on one specific record** stays in app code ("only the author edits their post").
 
-Before calling the work done, run `npx @nebulr-group/bridge-cli check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
+Before calling the work done, run `npx @nebulr-group/bridge-cli@alpha check gates` in the project. It lists every direct role, privilege, plan or plan-feature check with the flag to use instead. Fix each one.
 
-In NestJS, an endpoint is `@RequireFeatureFlag('…')` on the handler (or a route rule with `featureFlag`).
+In NestJS, an endpoint is `@RequireFlag('…')` on the handler (or a route rule with `featureFlag`).
 
-Roles: what a role can do is only true "in the default setup". Read the app's real roles and privileges (`list_roles` / `bridge role list`) before writing a rule. Prefer a privilege rule (`privileges contains "users:write"`) over a role rule; use a role rule (`user.role eq "ADMIN"`) only when the developer means the role itself. Privilege `contains` is exact membership.
+## Decide first
 
-## Decide first — which check do you need?
+| You want | Use |
+|---|---|
+| Every route needs a signed-in caller unless marked | `BridgeModule.forRoot({ guard: { global: true } })` and `@Public()` on the exceptions |
+| Only some controllers protected | `@UseGuards(BridgeAuthGuard)` on those controllers |
+| Some people get a route, others do not | `@RequireFlag('key')`; the flag's rule names the privilege, plan feature or rollout |
+| Only a person's token, or only a key | `@AcceptAuth('jwt')` / `@AcceptAuth('api_token')` |
+| A sensitive read checked as tightly as a write | `@Strict()` |
+| One specific record ("only the author edits it") | App code, comparing the record's owner with `actor.personId` |
 
-Every gate below is **declarative**: a guard plus decorators, not logic inside the handler. They are not interchangeable, and picking the wrong one usually fails open rather than loudly.
+The Actor carries no role and no privileges, on purpose. A role or privilege check in a handler is the mistake `bridge check gates` reports.
 
-| The question you are asking | The check | Denial |
-|---|---|---|
-| Is this caller authenticated at all? | `BridgeAuthGuard` — globally via `guard.global: true`, or `@UseGuards(BridgeAuthGuard)` | 401 |
-| Which credential may call this route? | `@AcceptAuth('jwt')` / `@AcceptAuth('api_token')` — default accepts both | 401 |
-| Who may use this endpoint (a privilege, a plan feature, a rollout)? | `@RequireFeatureFlag('…')`, or `featureFlag` on a route rule — the flag's rule says why | 402 `FEATURE_NOT_IN_PLAN` / 403 `FEATURE_NOT_PERMITTED` / 403 `FEATURE_OFF` |
-| Does an **API token** hold a scope? | `@RequirePrivilege('…')` — API tokens only | 403 |
-| Is the tenant under its plan limit for the thing this handler creates? | `@RequireQuota('…')` (+ `@SyncQuota` on the delete) — see `billing-prompt.md` | 402 `QUOTA_EXCEEDED` |
-| Should this one handler skip auth? | `@Public()`, or a `privilege: 'ANONYMOUS'` rule | — |
-| I am outside a request — socket hook, queue consumer, middleware | `JwksService.verifyToken` / `.verifyApiToken` directly | `TokenVerificationError` |
+## What the guard checks
 
-Two of these fail open, which is why this table comes before the steps:
+The guard reads `Authorization: Bearer <token>` (a person's access token) or `x-api-key` (a personal, service account or app key) and checks:
 
-- **`@RequirePrivilege` is API tokens only.** It is the scope a machine caller (x-api-key) must carry; a signed-in user is not checked against it (Step 4). If you meant "this user may not do this", you want `@RequireFeatureFlag('…')` with the flag ruled `privileges contains "<PRIVILEGE>"` — this decorator lets every signed-in user straight through.
-- **Every decorator here is inert without the guard.** `@RequireFeatureFlag`, `@RequirePrivilege` and `@AcceptAuth` only set metadata that `BridgeAuthGuard` reads. On a route the guard never runs on they are decoration, and the route is unprotected while looking protected. (`@RequireQuota` is the one that fails closed: with no user verified by the guard it answers 401 — which on a `@Public()` route means it refuses everyone.)
+- the signature against the app's key set, the issuer, the audience and the expiry;
+- the app's revocation list, followed every 2 seconds: an ended session, a removed member or a revoked key is refused within seconds, not when the token expires;
+- writes (POST, PUT, PATCH, DELETE) against a list at most 30 seconds behind (`guard.strictWrites`, on by default). `@Strict()` does the same for a read; `@Strict(false)` relaxes one write.
 
-If the user has not said which credential a route serves, ask. It changes the decorators *and* where the handler reads the tenant from.
+A refused credential gets `401` with `WWW-Authenticate`. While Bridge cannot be checked the guard answers `503` with `Retry-After`, never yes.
 
-## Prerequisites
+A signed-in person's write in a workspace that is suspended or scheduled for deletion is refused with `403` (`urn:bridge:problem:workspace-not-active`), and in a workspace locked for payment with `402 BILLING_GATE_ENGAGED`. Reads are never refused for these reasons. There is nothing to add for this.
 
-Verify Bridge is set up in this project:
+## Read the caller
 
-1. `@nebulr-group/bridge-nestjs` is in `package.json` dependencies.
-2. `BridgeModule.forRoot()` (or `forRootAsync`) is registered in the root `AppModule`.
-3. `BRIDGE_APP_ID` is set in the environment.
+```ts
+import { Controller, Get, Param } from '@nestjs/common';
+import { CurrentActor, type Actor } from '@nebulr-group/bridge-nestjs';
 
-If any are missing, run the integration guide (`integration-prompt.md`) first.
+@Controller('notes')
+export class NotesController {
+  constructor(private readonly notes: NotesService) {}
 
-## Two token types
+  @Get(':id')
+  async get(@CurrentActor() actor: Actor, @Param('id') id: string) {
+    // The workspace comes from the verified token; one record's owner is app code.
+    return this.notes.findInWorkspace(actor.workspaceId!, id);
+  }
+}
+```
 
-| Type | Header | Verified against | Attached to request | Typical use |
-|---|---|---|---|---|
-| User JWT | `Authorization: Bearer <jwt>` | `{apiBaseUrl}/auth/.well-known/jwks.json` | `req.bridgeUser`, `req.bridgeTenant` | Browser users via a frontend plugin |
-| API token | `x-api-key: <jwt>` | `{apiBaseUrl}/auth/account/app/.well-known/jwks.json` | `req.bridgeApiToken` | Server-to-server, programmatic access |
+| Field | What it is |
+|---|---|
+| `kind` | `person`, `personal_key`, `service_account_key`, `app_key` or `job` |
+| `id` | The person's, key's or job's id |
+| `personId` | The person behind the call (also for a personal key), or null |
+| `workspaceId` | The workspace the call acts in, or null when the credential names none |
+| `sessionId`, `appId`, `standing` | The sign-in session, the app, the workspace's standing (`active`, …) |
 
-`BridgeAuthGuard` inspects both headers. When an API token is present it is verified and its claims land on `req.bridgeApiToken`. When only a Bearer token is present it follows the user-JWT path. By default a route accepts **either**.
+`@CurrentActor('workspaceId')` gives one field. Outside a decorator, `BridgeService.actorOf(request)` gives the Actor the guard verified, and `BridgeService.verify(request)` checks a request yourself (it throws a `BridgeError`: 401, or 503 while Bridge cannot be checked).
 
-## Step 1 — Choose how the guard runs
+## Gate who gets a route with a flag
 
-**Global guard (recommended).** Set `guard.global: true` in `BridgeModule.forRoot()` and the guard runs on every route automatically. Mark exceptions with `@Public()` or `privilege: 'ANONYMOUS'` rules.
+```ts
+@RequireFlag('reports')
+@Get('reports')
+reports() { … }
+```
+
+Create the flag with its rule. Over MCP: `create_feature_flag`. From a terminal:
+
+```bash
+bridge flag create reports --when "privileges contains reports:read"
+```
+
+A route rule does the same from one list, when that reads better than decorators:
 
 ```ts
 BridgeModule.forRoot({
-  // appId comes from BRIDGE_APP_ID when omitted
   guard: {
     global: true,
-    defaultAccess: 'protected',
     rules: [
       { path: '/health', privilege: 'ANONYMOUS' },
-      { path: '/webhooks/*', privilege: 'ANONYMOUS' },
+      { path: '/webhooks/**', privilege: 'ANONYMOUS' },
+      { path: '/reports/*', privilege: 'AUTHENTICATED', featureFlag: 'reports' },
     ],
   },
-}),
+});
 ```
 
-Rule paths are the full request path, **including a global prefix**: with `app.setGlobalPrefix('api')` the health check is `/api/health`, so the rule is `{ path: '/api/health', … }`. A rule written without the prefix never matches (the plugin warns once at the first such request). For a single endpoint, `@Public()` on the handler avoids the question entirely.
+`privilege` in a rule is only `ANONYMOUS` (open to everyone) or `AUTHENTICATED` (a valid credential). A `path` is matched against the route as declared (`/reports/:id`, with any global prefix), never the URL the client sent: `*` is one segment, `**` any number. GraphQL resolvers use `graphqlField: 'Query.catalog'`. A decorator on the handler wins over a rule. The feature-flags guide covers refusals (`403 FEATURE_OFF`, `402 FEATURE_NOT_IN_PLAN`).
 
-**Per-controller / per-route guard.** If you prefer not to run globally, apply `@UseGuards(BridgeAuthGuard)` to the controllers or handlers that need protection:
+## Keys
+
+A request with `x-api-key` reaches a route only when a flag gates it and the flag is on for the key (put the key's privilege in the flag's rule), or when the route is open on purpose (`@Public()`, an `ANONYMOUS` rule, or `guard.defaultAccess: 'public'`). Otherwise the answer is `403` with `code: 'KEY_ROUTE_NOT_OPEN'`. A person's request is not affected.
 
 ```ts
-import { Controller, Get, UseGuards } from '@nestjs/common';
-import { BridgeAuthGuard, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
-
-@Controller('items')
-@UseGuards(BridgeAuthGuard)
-export class ItemsController {
-  @Get()
-  findAll(@CurrentUser() user: BridgeUser) {
-    return { user: user.email };
-  }
-}
+@RequireFlag('reports')   // rule: privileges contains reports:read, which the key holds
+@Get('reports')
+reports() { … }
 ```
 
-The examples below assume the guard is active (global or via `@UseGuards`).
+App keys are made with `bridge key create --name "<what for>" --privilege <privilege>` and revoked with `bridge key revoke <id>` (refused within seconds).
 
-## Step 2 — Read the authenticated user
-
-`@CurrentUser()` returns the verified `BridgeUser`; `@CurrentTenant()` returns the `BridgeTenant`. Both are parameter decorators and work in HTTP controllers and GraphQL resolvers.
+## Restrict the credential
 
 ```ts
-import { Controller, Get } from '@nestjs/common';
-import { CurrentUser, CurrentTenant, BridgeUser, BridgeTenant } from '@nebulr-group/bridge-nestjs';
+@AcceptAuth('jwt')        // a person's token only
+@Post('profile')
+update() { … }
 
-@Controller('users')
-export class UsersController {
-  @Get('me')
-  me(@CurrentUser() user: BridgeUser, @CurrentTenant() tenant: BridgeTenant) {
-    return {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      privileges: user.privileges,
-      tenant: { id: tenant.id, name: tenant.name },
-    };
-  }
-}
+@AcceptAuth('api_token')  // keys only
+@Post('import')
+import() { … }
 ```
 
-`BridgeUser`: `id`, `email`, `emailVerified`, `username`, `fullName`, `givenName?`, `familyName?`, `locale?`, `onboarded?`, `tenantId`, `appId?`, `scope?`, `role?`, `multiTenantAccess?`, `privileges?`.
+`both` is the default.
 
-`BridgeTenant`: `id`, `name`, `locale?`, `logo?`, `onboarded?`.
+## Public routes
 
-**Always scope queries to the verified `tenantId`.** A user's token is only ever valid for their current tenant; never accept a tenant ID from the request body and trust it.
+`@Public()` opens a route to everyone, keys included. A public route still reads flags: only flags marked public (`bridge flag create <key> --public`, or `--public` on `bridge flag update`) give a result; every other flag gives its fallback. A webhook receiver (`@BridgeWebhook()`) is public and checked by signature instead.
 
-## Step 3 — Gate who gets an endpoint with a flag
+## Sign-in itself happens in the frontend
 
-Who may call an endpoint is a flag. Create the flag, give it a rule on the privilege the endpoint needs, and put the flag on the handler:
+The backend never shows a sign-in page and never handles a password. People sign in in the frontend (bridge-svelte 1.0: `BridgeAuthRoutes`), which sends their access token to this API. Which sign-in methods exist is app configuration: over MCP `update_auth_methods`, from a terminal `bridge auth methods enable <method>`.
 
-```ts
-import { Controller, Get } from '@nestjs/common';
-import { RequireFeatureFlag } from '@nebulr-group/bridge-nestjs';
+## Access checklist
 
-@Controller('admin')
-@RequireFeatureFlag('admin-area')        // rule: privileges contains "users:write"
-export class AdminController {
-  @Get('dashboard')
-  dashboard() {}
-
-  @Get('settings')
-  @RequireFeatureFlag('admin-settings')  // rule: privileges contains "workspace:write" — most specific decorator wins
-  settings() {}
-}
-```
-
-In the default setup ADMIN and OWNER hold `users:write` and only OWNER holds `workspace:write`; read the app's real roles with `list_roles` / `bridge role list` before writing the rule. Changing who gets the endpoint is then a rule change, not a release. The same flag can sit on a route rule instead: `{ path: '/admin/*', privilege: 'AUTHENTICATED', featureFlag: 'admin-area' }`. See `feature-flags-prompt.md` for creating flags and rules.
-
-## Step 4 — Scope API tokens with `@RequirePrivilege` (API tokens only)
-
-`@RequirePrivilege(key)` enforces that the **API token** (x-api-key, a machine caller) carries a privilege in its `privileges` claim. It is a token scope, not a gate on a person: a signed-in user is not checked against it, so an endpoint can require `users:write` from API-token callers while signed-in users are gated by the endpoint's flag.
-
-```ts
-import { Controller, Get, Post } from '@nestjs/common';
-import { RequirePrivilege } from '@nebulr-group/bridge-nestjs';
-
-@Controller('users')
-export class UsersController {
-  @Get()
-  @RequirePrivilege('users:read')
-  list() {}
-
-  @Post()
-  @RequirePrivilege('users:write')
-  create() {}
-}
-```
-
-`ApiTokenClaims` (re-exported from auth-core via `@nebulr-group/bridge-nestjs`):
-
-```ts
-interface ApiTokenClaims {
-  sub: string;               // token subject
-  appId: string;             // app the token was issued for
-  tenantId: string | null;   // null for app-level tokens
-  type: 'api';
-  privileges: string[];
-}
-```
-
-## Step 5 — Restrict the accepted auth type
-
-`@AcceptAuth('jwt' | 'api_token' | 'both')` controls which credential a route accepts. Omitting the decorator is equivalent to `'both'`.
-
-```ts
-import { Controller, Get, Post, Req } from '@nestjs/common';
-import { AcceptAuth, RequirePrivilege, CurrentUser, BridgeUser } from '@nebulr-group/bridge-nestjs';
-import { Request } from 'express';
-
-@Controller('account')
-export class AccountController {
-  // User-only — an API token (x-api-key) gets 401.
-  @Get('profile')
-  @AcceptAuth('jwt')
-  profile(@CurrentUser() user: BridgeUser) {
-    return { email: user.email, role: user.role };
-  }
-}
-
-@Controller('integrations')
-export class IntegrationsController {
-  // API-token-only — a user Bearer token gets 401.
-  @Post('sync')
-  @AcceptAuth('api_token')
-  @RequirePrivilege('workspace:write')
-  sync(@Req() req: Request) {
-    const { tenantId } = req.bridgeApiToken!;
-    return this.syncService.run(tenantId);
-  }
-}
-```
-
-**Dual-auth handler** (default — branch on `req.bridgeApiToken`):
-
-```ts
-@Get()
-@RequirePrivilege('users:read')
-list(@CurrentUser() user: BridgeUser, @Req() req: Request) {
-  if (req.bridgeApiToken) {
-    // server-to-server: tenant comes from the API token
-    return this.usersService.findByTenant(req.bridgeApiToken.tenantId!);
-  }
-  // browser user: tenant comes from the JWT
-  return this.usersService.findByTenant(user.tenantId);
-}
-```
-
-## Step 6 — Mark public exceptions
-
-`@Public()` overrides any guard or rule and skips authentication for a handler (it is also how a handler is opened to API keys: a key is refused with 403 `KEY_ROUTE_NOT_OPEN` on a handler no flag gates, unless the handler is `@Public()`) — useful for a public `GET` beside a protected `POST` on the same path:
-
-```ts
-import { Controller, Get } from '@nestjs/common';
-import { Public } from '@nebulr-group/bridge-nestjs';
-
-@Controller()
-export class AppController {
-  @Get('health')
-  @Public()
-  health() {
-    return { status: 'ok' };
-  }
-}
-```
-
-Prefer `@Public()` on the handler: it follows the route wherever it is mounted, global prefix included. Use a rule (`privilege: 'ANONYMOUS'`) for a whole group of paths you do not own as handlers, such as `/api/webhooks/*`, and write it with the full path.
-
-## Verifying a token manually (advanced)
-
-For non-guard contexts — a custom middleware, a Centrifugo/WebSocket auth hook, a queue consumer — inject `JwksService` and verify directly. Wrap calls in a `TokenVerificationError` check.
-
-```ts
-import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { JwksService, TokenVerificationError } from '@nebulr-group/bridge-nestjs';
-
-@Injectable()
-export class SocketAuthService {
-  constructor(private readonly jwks: JwksService) {}
-
-  async authenticate(bearer: string) {
-    try {
-      const claims = await this.jwks.verifyToken(bearer);   // user JWT
-      return claims;
-    } catch (e) {
-      if (e instanceof TokenVerificationError) {
-        throw new UnauthorizedException('Invalid token');
-      }
-      throw e;
-    }
-  }
-
-  async authenticateApiToken(apiKey: string) {
-    // expectedAppId guards against tokens minted for a different app
-    return this.jwks.verifyApiToken(apiKey, process.env.BRIDGE_APP_ID!);
-  }
-}
-```
-
-`TokenVerificationError` is the **same class** the guard throws — `instanceof` checks behave identically regardless of which path raised it.
-
-## Access-control checklist
-
-- [ ] `BridgeModule.forRoot()` registered with `guard.global: true` (or `@UseGuards(BridgeAuthGuard)` on protected controllers)
-- [ ] `defaultAccess: 'protected'` so unmatched routes require a token
-- [ ] Public routes declared with `privilege: 'ANONYMOUS'` rules (or `@Public()` per-handler)
-- [ ] Handlers read identity via `@CurrentUser()` / `@CurrentTenant()`, never trust a tenant ID from the body
-- [ ] Who gets an endpoint is a flag: `@RequireFeatureFlag('…')` (or `featureFlag` on a route rule), ruled on a privilege, a plan feature or a rollout — never a role or plan read in the handler
-- [ ] Route rules use only `privilege: 'ANONYMOUS'` / `'AUTHENTICATED'` (anything else throws at startup)
-- [ ] `npx @nebulr-group/bridge-cli check gates` reports nothing
-- [ ] API-token privilege enforcement via `@RequirePrivilege()` where server-to-server access applies
-- [ ] `@AcceptAuth()` set on routes that must reject one credential type
-- [ ] Manual verification (if any) goes through `JwksService` + `TokenVerificationError`
+- [ ] The guard runs on every route that needs a credential (global, or `@UseGuards(BridgeAuthGuard)`).
+- [ ] Every route some people get and others do not has `@RequireFlag` or a rule's `featureFlag`.
+- [ ] No handler reads a role, a privilege or the plan.
+- [ ] The workspace comes from `@CurrentActor('workspaceId')`, never from the request body.
+- [ ] Routes open to everyone say `@Public()` on purpose.
 
 ## Verify
 
-1. **Build:** the project builds with no TypeScript or import errors.
-2. **No token → 401:** a protected route without a credential returns 401.
-3. **Valid JWT → 200:** a protected route with a valid `Authorization: Bearer` returns 200 scoped to the JWT's tenant.
-4. **Flag gate:** a `@RequireFeatureFlag('admin-settings')` route returns 403 `FEATURE_NOT_PERMITTED` / `FEATURE_OFF` for a JWT the flag is off for, and 200 once the flag's rule matches that user.
-5. **Privilege gate:** an `@AcceptAuth('api_token')` + `@RequirePrivilege('workspace:write')` route returns 200 for an API token carrying `workspace:write`, 401 for a user Bearer token, and 403 for an API token missing the privilege.
-6. **Auth-type restriction:** an `@AcceptAuth('jwt')` route returns 401 when called with `x-api-key`.
+### Terminal checks
+
+1. `npm run build` passes.
+2. A protected route without a token: `curl -i http://localhost:3000/me` answers `401`.
+3. A route gated by a flag, called with a key whose privilege the rule does not name, answers `403 FEATURE_OFF`; a route with no gate called with a key answers `403 KEY_ROUTE_NOT_OPEN`.
+4. `bridge flag get <key>` shows the rule you meant.
+5. `npx @nebulr-group/bridge-cli@alpha check gates` lists nothing.
+
+### Browser checks
+
+1. Signed in in the frontend, the gated route answers for a person whose privileges the rule names, and is refused for one whose privileges it does not.
+
+Run the terminal checks. If you have a browser tool, run the browser checks too. If you do not, list them for the developer, numbered, and start the summary with a Heads up line saying which checks were not run. That line starts "Heads up: not verified in a browser".
